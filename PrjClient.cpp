@@ -8,9 +8,12 @@
 #include "resource.h"
 #include <Commctrl.h>
 
-#define MCAST "235.7.8.1"
+#define MULTICAST_SEND_IPv4 "235.7.8.1"
 #define MULTICASTIPv4 "235.7.8.2"
+
+#define MULTICAST_SEND_IPv6 "FF12::1:2:3:9"
 #define MULTICASTIPv6 "FF12::1:2:3:4"
+
 #define SERVERIPV4  "127.0.0.1"
 #define SERVERIPV6  "::1"
 #define SERVERPORT  9000
@@ -84,7 +87,9 @@ static BOOL          g_isIPv6; // IPv4 or IPv6 주소?
 static HANDLE        g_hClientThread; // 스레드 핸들
 static volatile BOOL g_bStart; // 통신 시작 여부
 static SOCKET        g_sock; // 클라이언트 소켓
+
 static HANDLE        g_hReadEvent, g_hWriteEvent; // 이벤트 핸들
+
 static CHAT_MSG      g_chatmsg; // 채팅 메시지 저장
 static DRAWLINE_MSG  g_drawmsg; // 선 그리기 메시지 저장
 static int           g_drawcolor; // 선 그리기 색상
@@ -97,6 +102,9 @@ static BOOL			g_isUDP; // 체크하면 UDP, 아니면 그냥 TCP
 DWORD WINAPI WriteThread_UDP(LPVOID);
 DWORD WINAPI ReadThread_UDP(LPVOID);
 DWORD WINAPI ClientMainUDP(LPVOID);
+DWORD WINAPI WriteThread_UDPv6(LPVOID);
+DWORD WINAPI ReadThread_UDPv6(LPVOID);
+
 
 // 대화상자 프로시저
 BOOL CALLBACK DlgProc(HWND, UINT, WPARAM, LPARAM);
@@ -228,7 +236,7 @@ BOOL CALLBACK DlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
 
 		return TRUE;
 
-	//굵기
+		//굵기
 	case WM_HSCROLL:
 		g_drawmsg.width = SendDlgItemMessage(hDlg, IDC_THICK, TBM_GETPOS, 0, 0);
 		return 0;
@@ -267,7 +275,7 @@ BOOL CALLBACK DlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
 				else
 					SetDlgItemText(hDlg, IDC_IPADDR, SERVERIPV6);
 			}
-				
+
 			return TRUE;
 
 		case IDC_CONNECT:// <수정>
@@ -299,6 +307,7 @@ BOOL CALLBACK DlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
 					}
 				}
 				else { // UDP 연결 <수정>
+
 					g_port = GetDlgItemInt(hDlg, IDC_PORT, NULL, FALSE);
 					g_isIPv6 = SendMessage(hButtonIsIPv6, BM_GETCHECK, 0, 0);
 					GetDlgItemText(hDlg, IDC_USERID, (LPSTR)g_chatmsg.client_id, ID_SIZE);
@@ -320,8 +329,9 @@ BOOL CALLBACK DlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
 						EnableWindow(hUDPCheck, FALSE);
 						SetFocus(hEditMsg);
 					}
+
 				}
-				
+
 				return TRUE;
 			}
 
@@ -338,8 +348,8 @@ BOOL CALLBACK DlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
 			// 입력된 텍스트 전체를 선택 표시
 			SendMessage(hEditMsg, EM_SETSEL, 0, -1);
 			return TRUE;
-		
-		// 색깔
+
+			// 색깔
 		case IDC_COLORRED:
 			g_drawmsg.color = RGB(255, 0, 0);
 			return TRUE;
@@ -369,7 +379,7 @@ BOOL CALLBACK DlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
 			}
 			return TRUE;
 
-		//도형
+			//도형
 		case IDC_LINE:
 			g_drawmsg.type = DRAWLINE;
 			return TRUE;
@@ -479,7 +489,7 @@ DWORD WINAPI ReadThread(LPVOID arg)
 
 	while (1) {
 		retval = recvn(g_sock, (char*)&comm_msg, BUFSIZE, 0);
-		
+
 		if (retval == 0 || retval == SOCKET_ERROR) {
 			break;
 		}
@@ -578,6 +588,7 @@ DWORD WINAPI ClientMainUDP(LPVOID arg) {
 
 		hThread[0] = CreateThread(NULL, 0, ReadThread_UDP, NULL, 0, NULL);
 		hThread[1] = CreateThread(NULL, 0, WriteThread_UDP, NULL, 0, NULL);
+		MessageBox(NULL, "서버에 UDPv4로 접속했습니다.", "성공!", MB_ICONINFORMATION);
 	}
 
 	else {
@@ -587,11 +598,12 @@ DWORD WINAPI ClientMainUDP(LPVOID arg) {
 		send_sock_UDPv6 = socket(AF_INET6, SOCK_DGRAM, 0);
 		if (send_sock_UDPv6 == INVALID_SOCKET) err_quit("socket()");
 
-		//hThread[0] = CreateThread(NULL, 0, ReadThread_UDPv6, NULL, 0, NULL);
-		//hThread[1] = CreateThread(NULL, 0, WriteThread_UDPv6, NULL, 0, NULL);
+		hThread[0] = CreateThread(NULL, 0, ReadThread_UDPv6, NULL, 0, NULL);
+		hThread[1] = CreateThread(NULL, 0, WriteThread_UDPv6, NULL, 0, NULL);
+		MessageBox(NULL, "서버에 UDPv6로 접속했습니다.", "성공!", MB_ICONINFORMATION);
 	}
 
-	MessageBox(NULL, "서버에 UDP로 접속했습니다.", "성공!", MB_ICONINFORMATION);
+
 
 	// 읽기 & 쓰기 스레드 생성 UDP
 	// UDP IP 버전 따져서 스레드 실행할 것
@@ -724,7 +736,7 @@ DWORD WINAPI WriteThread_UDP(LPVOID arg) {
 	SOCKADDR_IN remoteaddr_v4;
 	ZeroMemory(&remoteaddr_v4, sizeof(remoteaddr_v4));
 	remoteaddr_v4.sin_family = AF_INET;
-	remoteaddr_v4.sin_addr.s_addr = inet_addr(MCAST);
+	remoteaddr_v4.sin_addr.s_addr = inet_addr(MULTICAST_SEND_IPv4);
 	remoteaddr_v4.sin_port = htons(REMOTEPORT);
 
 	while (1) {
@@ -755,6 +767,146 @@ DWORD WINAPI WriteThread_UDP(LPVOID arg) {
 	return 0;
 }
 
+DWORD WINAPI ReadThread_UDPv6(LPVOID arg) {
+	bool optval = TRUE;
+	int retvalUDP = setsockopt(listen_sock_UDPv6, SOL_SOCKET,
+		SO_REUSEADDR, (char*)&optval, sizeof(optval));
+	if (retvalUDP == SOCKET_ERROR) err_quit("setsockopt()");
+
+	// bind()
+	SOCKADDR_IN6 serveraddrUDPv6;
+	ZeroMemory(&serveraddrUDPv6, sizeof(serveraddrUDPv6));
+	serveraddrUDPv6.sin6_family = AF_INET6;
+	serveraddrUDPv6.sin6_addr = in6addr_any;
+	serveraddrUDPv6.sin6_port = htons(SERVERPORT);
+	retvalUDP = bind(listen_sock_UDPv6, (SOCKADDR*)&serveraddrUDPv6, sizeof(serveraddrUDPv6));
+	if (retvalUDP == SOCKET_ERROR) err_quit("bind()");
+
+
+	// 주소 변환(문자열 -> IPv6)
+	SOCKADDR_IN6 tmpaddr;
+	int addrlenTmp = sizeof(tmpaddr);
+	WSAStringToAddress(MULTICASTIPv6, AF_INET6, NULL,
+		(SOCKADDR*)&tmpaddr, &addrlenTmp);
+
+	// 멀티캐스트 그룹 가입
+	struct ipv6_mreq mreq_v6;
+	mreq_v6.ipv6mr_multiaddr = tmpaddr.sin6_addr;
+	mreq_v6.ipv6mr_interface = 0;
+	retvalUDP = setsockopt(listen_sock_UDPv6, IPPROTO_IPV6, IPV6_ADD_MEMBERSHIP,
+		(char*)&mreq_v6, sizeof(mreq_v6));
+	if (retvalUDP == SOCKET_ERROR) {
+		err_quit("setsockopt()");
+	}
+
+	SOCKADDR_IN6 peeraddr;
+	int addrlen;
+	COMM_MSG comm_msg;
+	CHAT_MSG* chat_msg;
+	DRAWLINE_MSG* draw_msg;
+
+	while (1) {
+		addrlen = sizeof(peeraddr);
+		retvalUDP = recvfrom(listen_sock_UDPv6, (char*)&comm_msg, BUFSIZE, 0, (SOCKADDR*)&peeraddr, &addrlen);
+		if (retvalUDP == 0 || retvalUDP == SOCKET_ERROR) {
+			break;
+		}
+
+		if (comm_msg.type == CHATTING) {
+			chat_msg = (CHAT_MSG*)&comm_msg;
+			if (strcmp(chat_msg->client_id, g_chatmsg.client_id) == 0) {
+				DisplayText_Send("[%s] %s\r\n", chat_msg->client_id, chat_msg->buf);
+				DisplayText_Recv("%s\r\n", " ");
+			}
+			else
+			{
+				DisplayText_Recv("[%s] %s\r\n", chat_msg->client_id, chat_msg->buf);
+				DisplayText_Send("%s\r\n", " ");
+			}
+		}
+		else if (comm_msg.type == DRAWERAS) {
+			draw_msg = (DRAWLINE_MSG*)&comm_msg;
+			g_drawcolor = RGB(255, 255, 255);
+			g_drawmsg.type = draw_msg->type;
+			g_drawmsg.x0 = draw_msg->x0;
+			g_drawmsg.y0 = draw_msg->y0;
+			g_drawmsg.x1 = draw_msg->x1;
+			g_drawmsg.y1 = draw_msg->y1;
+
+			g_drawmsg.width = draw_msg->width;
+			SendMessage(g_hDrawWnd, WM_DRAWIT,
+				MAKEWPARAM(draw_msg->x0, draw_msg->y0),
+				MAKELPARAM(draw_msg->x1, draw_msg->y1));
+		}
+		else {
+			draw_msg = (DRAWLINE_MSG*)&comm_msg;
+			g_drawcolor = draw_msg->color;
+			g_drawmsg.type = draw_msg->type;
+			g_drawmsg.x0 = draw_msg->x0;
+			g_drawmsg.y0 = draw_msg->y0;
+			g_drawmsg.x1 = draw_msg->x1;
+			g_drawmsg.y1 = draw_msg->y1;
+
+			g_drawmsg.width = draw_msg->width;
+			SendMessage(g_hDrawWnd, WM_DRAWIT,
+				MAKEWPARAM(draw_msg->x0, draw_msg->y0),
+				MAKELPARAM(draw_msg->x1, draw_msg->y1));
+		}
+	}
+
+	// 멀티캐스트 그룹 탈퇴
+	retvalUDP = setsockopt(listen_sock_UDPv6, IPPROTO_IPV6, IPV6_DROP_MEMBERSHIP,
+		(char*)&mreq_v6, sizeof(mreq_v6));
+	if (retvalUDP == SOCKET_ERROR) err_quit("setsockopt()");
+
+	return 0;
+}
+
+DWORD WINAPI WriteThread_UDPv6(LPVOID arg) {
+	int retvalUDP;
+
+	//int ttl_v4 = 2; // 문제
+	//retvalUDP = setsockopt(send_sock_UDPv4, IPPROTO_IP, IP_MULTICAST_TTL,
+	//	(char*)ttl_v4, sizeof(ttl_v4));
+	//if (retvalUDP == SOCKET_ERROR) {
+	//	err_quit("setsockopt()");
+	//}
+
+	SOCKADDR_IN6 remoteaddr_v6;
+	ZeroMemory(&remoteaddr_v6, sizeof(remoteaddr_v6));
+	remoteaddr_v6.sin6_family = AF_INET6;
+	int addrlen = sizeof(remoteaddr_v6);
+	WSAStringToAddress(MULTICAST_SEND_IPv6, AF_INET6, NULL,
+		(SOCKADDR*)&remoteaddr_v6, &addrlen);
+	remoteaddr_v6.sin6_port = htons(REMOTEPORT);
+
+	while (1) {
+
+		WaitForSingleObject(g_hWriteEvent, INFINITE);
+
+		if (strlen(g_chatmsg.buf) == 0) {
+			EnableWindow(g_hButtonSendMsg, TRUE);
+			// 읽기 완료 알리기
+			SetEvent(g_hReadEvent);
+			continue;
+		}
+		// 데이터 보내기
+		retvalUDP = sendto(send_sock_UDPv6, (char*)&g_chatmsg, BUFSIZE, 0,
+			(SOCKADDR*)&remoteaddr_v6, sizeof(remoteaddr_v6));
+		if (retvalUDP == SOCKET_ERROR) {
+			DisplayText_Send("writethread_UDP_Break\r\n");
+			break;
+		}
+
+		// '메시지 전송' 버튼 활성화
+		EnableWindow(g_hButtonSendMsg, TRUE);
+
+		// 읽기 완료 알리기
+		SetEvent(g_hReadEvent);
+	}
+
+	return 0;
+}
 
 
 // 자식 윈도우 프로시저
@@ -828,7 +980,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 		hPen = CreatePen(PS_SOLID, g_drawmsg.width, g_drawcolor);
 
 		//직선,선
-		if (g_drawmsg.type == DRAWLINE || g_drawmsg.type == DRAWSTRA) { 
+		if (g_drawmsg.type == DRAWLINE || g_drawmsg.type == DRAWSTRA) {
 			// 화면에 그리기
 			hOldPen = (HPEN)SelectObject(hDC, hPen);
 			MoveToEx(hDC, LOWORD(wParam), HIWORD(wParam), NULL);
