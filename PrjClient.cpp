@@ -24,14 +24,16 @@
 #define ID_SIZE     20
 #define CHECK_WHO   1
 
-#define CHATTING    1000                   // 메시지 타입: 채팅
-#define DRAWLINE    1001                   // 메시지 타입: 선 그리기
-#define DRAWSTRA    1002				   // 메시지 타입: 직선 그리기
-#define DRAWTRIA    1003				   // 메시지 타입: 삼각형 그리기		
-#define DRAWRECT    1004				   // 메시지 타입: 사각형 그리기			
-#define DRAWCIRC    1005				   // 메시지 타입: 원 그리기
-#define DRAWERAS    1006				   // 메시지 타입: 지우개
+#define CHATTING    2000                   // 메시지 타입: 채팅
+#define DRAWLINE    2001                   // 메시지 타입: 선 그리기
+#define DRAWSTRA    2002				   // 메시지 타입: 직선 그리기
+#define DRAWTRIA    2003				   // 메시지 타입: 삼각형 그리기		
+#define DRAWRECT    2004				   // 메시지 타입: 사각형 그리기			
+#define DRAWCIRC    2005				   // 메시지 타입: 원 그리기
+#define DRAWERAS    2006				   // 메시지 타입: 지우개
 
+#define ACCESS	    3000				   // 메시지 타입: 클라이언트 아이디 서버에 최초 전송
+#define KICKOUT     3001
 #define WM_DRAWIT   (WM_USER+1)            // 사용자 정의 윈도우 메시지
 
 // 공통 메시지 형식
@@ -66,6 +68,14 @@ struct DRAWLINE_MSG
 	char whoSent;
 };
 
+//<수정> 최초 연결 설정시 보내는 데이터 형식
+struct INIT_MSG {
+	int type;
+	char client_id[ID_SIZE];
+	char buf[MSGSIZE];
+	char whoSent;
+};
+
 // UDP 소켓 파라미터 <수정>
 struct SOCKET_SendnRecv {
 	SOCKET recv;
@@ -97,13 +107,19 @@ static int           g_drawr; // 반지름 저장
 static HWND			 hEditUserID;//사용자 ID
 
 // 수정
+static INIT_MSG		g_initmsg;
+
 static HWND			g_hEditStatus2; // 보낸 메시지 출력 (내가 보냄)
 static BOOL			g_isUDP; // 체크하면 UDP, 아니면 그냥 TCP
+static BOOL			g_boardValid; // 현재 그림판 활성화 상태
 DWORD WINAPI WriteThread_UDP(LPVOID);
 DWORD WINAPI ReadThread_UDP(LPVOID);
 DWORD WINAPI ClientMainUDP(LPVOID);
 DWORD WINAPI WriteThread_UDPv6(LPVOID);
 DWORD WINAPI ReadThread_UDPv6(LPVOID);
+
+SOCKADDR_IN remoteaddr_v4;
+SOCKADDR_IN6 remoteaddr_v6;
 
 
 // 대화상자 프로시저
@@ -145,6 +161,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
 	g_drawmsg.color = RGB(0, 0, 0);
 	g_drawmsg.width = 5;
 
+	//수정
+	g_initmsg.type = ACCESS;
+	strncpy(g_initmsg.buf, "CLIENT_ACCESS", MSGSIZE);
+
 	// 대화상자 생성
 	g_hInst = hInstance;
 	DialogBox(hInstance, MAKEINTRESOURCE(IDD_DIALOG1), NULL, DlgProc);
@@ -172,6 +192,10 @@ BOOL CALLBACK DlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
 	static HWND hColorBlack;
 	static HWND hColorPink;
 	static HWND hLineWidth;
+	
+	static HWND hBoardClear;
+	static HWND hNewBoard;
+	static HWND hDelBoard;
 
 	// 수정
 	static HWND hUDPCheck;
@@ -197,10 +221,13 @@ BOOL CALLBACK DlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
 		// 수정
 		g_hEditStatus2 = GetDlgItem(hDlg, IDC_STATUS2);
 		hUDPCheck = GetDlgItem(hDlg, IDC_UDPCHECK);
+		hBoardClear = (GetDlgItem(hDlg, IDC_BOARDCLEAR));
+		hNewBoard = (GetDlgItem(hDlg, IDC_NEWBOARD));
+		hDelBoard =(GetDlgItem(hDlg, IDC_DELBOARD));
 
 		// 컨트롤 초기화
 		SendMessage(hEditMsg, EM_SETLIMITTEXT, MSGSIZE, 0);
-		SendMessage(hEditUserID, EM_SETLIMITTEXT, ID_SIZE, 0);
+		SendMessage(hEditUserID, EM_SETLIMITTEXT, ID_SIZE-1, 0);
 		EnableWindow(g_hButtonSendMsg, FALSE);
 		SetDlgItemText(hDlg, IDC_IPADDR, SERVERIPV4);
 		SetDlgItemInt(hDlg, IDC_PORT, SERVERPORT, FALSE);
@@ -211,7 +238,6 @@ BOOL CALLBACK DlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
 		SendMessage(hColorPink, BM_SETCHECK, BST_UNCHECKED, 0);
 		SendMessage(hLineWidth, TBM_SETPOS, TRUE, 5);
 		SendMessage(hLineWidth, TBM_SETRANGE, (WPARAM)1, (LPARAM)MAKELONG(1, 10));
-
 
 		// 윈도우 클래스 등록
 		WNDCLASS wndclass;
@@ -226,14 +252,19 @@ BOOL CALLBACK DlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
 		wndclass.lpszMenuName = NULL;
 		wndclass.lpszClassName = "MyWndClass";
 		if (!RegisterClass(&wndclass)) return 1;
+		g_boardValid = FALSE;
 
 		// 자식 윈도우 생성
-		g_hDrawWnd = CreateWindow("MyWndClass", "그림 그릴 윈도우", WS_CHILD,
-			450, 60, 425, 415, hDlg, (HMENU)NULL, g_hInst, NULL);
-		if (g_hDrawWnd == NULL) return 1;
-		ShowWindow(g_hDrawWnd, SW_SHOW);
-		UpdateWindow(g_hDrawWnd);
+		if (g_boardValid == FALSE) {
+			g_hDrawWnd = CreateWindow("MyWndClass", "그림 그릴 윈도우", WS_CHILD,
+				450, 60, 425, 415, hDlg, (HMENU)NULL, g_hInst, NULL);
+			if (g_hDrawWnd == NULL) return 1;
+			ShowWindow(g_hDrawWnd, SW_SHOW);
+			UpdateWindow(g_hDrawWnd);
 
+			g_boardValid = TRUE;
+			EnableWindow(hNewBoard, FALSE);
+		}
 		return TRUE;
 
 		//굵기
@@ -243,6 +274,52 @@ BOOL CALLBACK DlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
 
 	case WM_COMMAND:
 		switch (LOWORD(wParam)) {
+
+		case IDC_MSG:
+			if (HIWORD(wParam) == EN_SETFOCUS) {
+				//DisplayText_Send("IDC_MSG");
+			}
+			return TRUE;
+
+		case IDC_BOARDCLEAR: // 그림판 비우기
+			if (g_boardValid == TRUE) {
+				DestroyWindow(g_hDrawWnd);
+				g_hDrawWnd = CreateWindow("MyWndClass", "그림 그릴 윈도우", WS_CHILD,
+					450, 60, 425, 415, hDlg, (HMENU)NULL, g_hInst, NULL);
+				if (g_hDrawWnd == NULL) return 1;
+				ShowWindow(g_hDrawWnd, SW_SHOW);
+				UpdateWindow(g_hDrawWnd);
+
+				g_boardValid = TRUE;
+				EnableWindow(hNewBoard, FALSE);
+			}
+
+			return TRUE;
+
+		case IDC_NEWBOARD:
+			if (g_boardValid == FALSE) {
+				g_hDrawWnd = CreateWindow("MyWndClass", "그림 그릴 윈도우", WS_CHILD,
+					450, 60, 425, 415, hDlg, (HMENU)NULL, g_hInst, NULL);
+				if (g_hDrawWnd == NULL) return 1;
+				ShowWindow(g_hDrawWnd, SW_SHOW);
+				UpdateWindow(g_hDrawWnd);
+
+				g_boardValid = TRUE;
+				EnableWindow(hNewBoard, FALSE);
+				EnableWindow(hBoardClear, TRUE);
+			}
+			return TRUE;
+
+		case IDC_DELBOARD:
+			if (g_boardValid == TRUE) {
+				DestroyWindow(g_hDrawWnd);
+
+				g_boardValid = FALSE;
+				EnableWindow(hNewBoard, TRUE);
+				EnableWindow(hBoardClear, FALSE);
+			}
+			return TRUE;
+
 		case IDC_ISIPV6: // <수정>
 			g_isIPv6 = SendMessage(hButtonIsIPv6, BM_GETCHECK, 0, 0);
 			g_isUDP = SendMessage(hUDPCheck, BM_GETCHECK, 0, 0);
@@ -282,11 +359,15 @@ BOOL CALLBACK DlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
 			if (GetDlgItemText(hDlg, IDC_USERID, (LPSTR)g_chatmsg.client_id, ID_SIZE) != NULL) {
 				// UDP 일때 연결 X, TCP일 때 연결
 				g_isUDP = SendMessage(hUDPCheck, BM_GETCHECK, 0, 0);
+				// InitMSG에 사용자 이름 추가
+				GetDlgItemText(hDlg, IDC_USERID, (LPSTR)g_initmsg.client_id, ID_SIZE);
+
+				g_isIPv6 = SendMessage(hButtonIsIPv6, BM_GETCHECK, 0, 0);
+				GetDlgItemText(hDlg, IDC_USERID, (LPSTR)g_chatmsg.client_id, ID_SIZE);
+				g_port = GetDlgItemInt(hDlg, IDC_PORT, NULL, FALSE);
+
 				if (g_isUDP == false) {
 					GetDlgItemText(hDlg, IDC_IPADDR, g_ipaddr, sizeof(g_ipaddr));
-					g_port = GetDlgItemInt(hDlg, IDC_PORT, NULL, FALSE);
-					g_isIPv6 = SendMessage(hButtonIsIPv6, BM_GETCHECK, 0, 0);
-					GetDlgItemText(hDlg, IDC_USERID, (LPSTR)g_chatmsg.client_id, ID_SIZE);
 
 					// 소켓 통신 스레드 시작
 					g_hClientThread = CreateThread(NULL, 0, ClientMain, NULL, 0, NULL);
@@ -307,10 +388,6 @@ BOOL CALLBACK DlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
 					}
 				}
 				else { // UDP 연결 <수정>
-
-					g_port = GetDlgItemInt(hDlg, IDC_PORT, NULL, FALSE);
-					g_isIPv6 = SendMessage(hButtonIsIPv6, BM_GETCHECK, 0, 0);
-					GetDlgItemText(hDlg, IDC_USERID, (LPSTR)g_chatmsg.client_id, ID_SIZE);
 
 					// 소켓 UDP통신 스레드 시작
 					g_hClientThread = CreateThread(NULL, 0, ClientMainUDP, NULL, 0, NULL);
@@ -445,6 +522,7 @@ DWORD WINAPI ClientMain(LPVOID arg)
 		retval = connect(g_sock, (SOCKADDR*)&serveraddr, sizeof(serveraddr));
 		if (retval == SOCKET_ERROR) err_quit("connect()");
 	}
+	retval = send(g_sock, (char*)&g_initmsg, BUFSIZE, 0);
 	MessageBox(NULL, "서버에 TCP로 접속했습니다.", "성공!", MB_ICONINFORMATION);
 
 	// 읽기 & 쓰기 스레드 생성
@@ -490,9 +568,10 @@ DWORD WINAPI ReadThread(LPVOID arg)
 	while (1) {
 		retval = recvn(g_sock, (char*)&comm_msg, BUFSIZE, 0);
 
-		if (retval == 0 || retval == SOCKET_ERROR) {
+		if (retval == 0 || retval == SOCKET_ERROR ) {
 			break;
 		}
+
 
 		if (comm_msg.type == CHATTING) {
 			chat_msg = (CHAT_MSG*)&comm_msg;
@@ -733,11 +812,13 @@ DWORD WINAPI WriteThread_UDP(LPVOID arg) {
 	//	err_quit("setsockopt()");
 	//}
 
-	SOCKADDR_IN remoteaddr_v4;
 	ZeroMemory(&remoteaddr_v4, sizeof(remoteaddr_v4));
 	remoteaddr_v4.sin_family = AF_INET;
 	remoteaddr_v4.sin_addr.s_addr = inet_addr(MULTICAST_SEND_IPv4);
 	remoteaddr_v4.sin_port = htons(REMOTEPORT);
+
+	retvalUDP = sendto(send_sock_UDPv4, (char*)&g_initmsg, BUFSIZE, 0,
+		(SOCKADDR*)&remoteaddr_v4, sizeof(remoteaddr_v4));
 
 	while (1) {
 
@@ -872,13 +953,16 @@ DWORD WINAPI WriteThread_UDPv6(LPVOID arg) {
 	//	err_quit("setsockopt()");
 	//}
 
-	SOCKADDR_IN6 remoteaddr_v6;
+	
 	ZeroMemory(&remoteaddr_v6, sizeof(remoteaddr_v6));
 	remoteaddr_v6.sin6_family = AF_INET6;
 	int addrlen = sizeof(remoteaddr_v6);
 	WSAStringToAddress(MULTICAST_SEND_IPv6, AF_INET6, NULL,
 		(SOCKADDR*)&remoteaddr_v6, &addrlen);
 	remoteaddr_v6.sin6_port = htons(REMOTEPORT);
+
+	retvalUDP = sendto(send_sock_UDPv6, (char*)&g_initmsg, BUFSIZE, 0,
+		(SOCKADDR*)&remoteaddr_v6, sizeof(remoteaddr_v6));
 
 	while (1) {
 
@@ -942,6 +1026,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 
 		ReleaseDC(hWnd, hDC);
 		return 0;
+
 	case WM_LBUTTONDOWN:
 		x0 = LOWORD(lParam);
 		y0 = HIWORD(lParam);
@@ -957,7 +1042,17 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 			g_drawmsg.y0 = y0;
 			g_drawmsg.x1 = x1;
 			g_drawmsg.y1 = y1;
-			send(g_sock, (char*)&g_drawmsg, BUFSIZE, 0);
+
+			if(g_isUDP == FALSE)
+				send(g_sock, (char*)&g_drawmsg, BUFSIZE, 0);
+			else {
+				if (g_isIPv6 == TRUE)
+					sendto(send_sock_UDPv6, (char*)&g_drawmsg, BUFSIZE, 0,
+						(SOCKADDR*)&remoteaddr_v6, sizeof(remoteaddr_v6));
+				else
+					sendto(send_sock_UDPv4, (char*)&g_drawmsg, BUFSIZE, 0,
+						(SOCKADDR*)&remoteaddr_v4, sizeof(remoteaddr_v4)); 
+			}
 			x0 = x1;
 			y0 = y1;
 		}
@@ -971,7 +1066,17 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 			g_drawmsg.y0 = y0;
 			g_drawmsg.x1 = x1;
 			g_drawmsg.y1 = y1;
-			send(g_sock, (char*)&g_drawmsg, BUFSIZE, 0);
+
+			if (g_isUDP == FALSE)
+				send(g_sock, (char*)&g_drawmsg, BUFSIZE, 0);
+			else {
+				if (g_isIPv6 == TRUE)
+					sendto(send_sock_UDPv6, (char*)&g_drawmsg, BUFSIZE, 0,
+						(SOCKADDR*)&remoteaddr_v6, sizeof(remoteaddr_v6));
+				else
+					sendto(send_sock_UDPv4, (char*)&g_drawmsg, BUFSIZE, 0,
+						(SOCKADDR*)&remoteaddr_v4, sizeof(remoteaddr_v4));
+			}
 		}
 		bDrawing = FALSE;
 		return 0;
@@ -1059,7 +1164,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 	case WM_DESTROY:
 		DeleteObject(hBitmap);
 		DeleteDC(hDCMem);
-		PostQuitMessage(0);
+		//PostQuitMessage(0);
 		return 0;
 	}
 
@@ -1145,4 +1250,3 @@ void err_display(char* msg)
 	printf("[%s] %s", msg, (char*)lpMsgBuf);
 	LocalFree(lpMsgBuf);
 }
-
