@@ -568,7 +568,7 @@ DWORD WINAPI ReadThread(LPVOID arg)
 	while (1) {
 		retval = recvn(g_sock, (char*)&comm_msg, BUFSIZE, 0);
 
-		if (retval == 0 || retval == SOCKET_ERROR ) {
+		if (retval == 0 || retval == SOCKET_ERROR || comm_msg.type == KICKOUT ) {
 			break;
 		}
 
@@ -682,8 +682,6 @@ DWORD WINAPI ClientMainUDP(LPVOID arg) {
 		MessageBox(NULL, "서버에 UDPv6로 접속했습니다.", "성공!", MB_ICONINFORMATION);
 	}
 
-
-
 	// 읽기 & 쓰기 스레드 생성 UDP
 	// UDP IP 버전 따져서 스레드 실행할 것
 	if (hThread[0] == NULL || hThread[1] == NULL) {
@@ -748,7 +746,7 @@ DWORD WINAPI ReadThread_UDP(LPVOID arg) {
 	while (1) {
 		addrlen = sizeof(peeraddr);
 		retvalUDP = recvfrom(listen_sock_UDPv4, (char*)&comm_msg, BUFSIZE, 0, (SOCKADDR*)&peeraddr, &addrlen);
-		if (retvalUDP == 0 || retvalUDP == SOCKET_ERROR) {
+		if (retvalUDP == 0 || retvalUDP == SOCKET_ERROR || comm_msg.type == KICKOUT) {
 			break;
 		}
 
@@ -889,7 +887,7 @@ DWORD WINAPI ReadThread_UDPv6(LPVOID arg) {
 	while (1) {
 		addrlen = sizeof(peeraddr);
 		retvalUDP = recvfrom(listen_sock_UDPv6, (char*)&comm_msg, BUFSIZE, 0, (SOCKADDR*)&peeraddr, &addrlen);
-		if (retvalUDP == 0 || retvalUDP == SOCKET_ERROR) {
+		if (retvalUDP == 0 || retvalUDP == SOCKET_ERROR || comm_msg.type == KICKOUT) {
 			break;
 		}
 
