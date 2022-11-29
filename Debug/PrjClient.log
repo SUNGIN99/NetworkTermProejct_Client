@@ -1,12 +1,1 @@
-﻿  PrjClient.cpp
-C:\Users\d\Desktop\c_git\SUNGIN99\NetworkTermProejct_Client\PrjClient.cpp(166,2): warning C4996: 'strncpy': This function or variable may be unsafe. Consider using strncpy_s instead. To disable deprecation, use _CRT_SECURE_NO_WARNINGS. See online help for details.
-C:\Users\d\Desktop\c_git\SUNGIN99\NetworkTermProejct_Client\PrjClient.cpp(343,19): warning C4805: '==': 연산에 'BOOL' 형식과 'bool' 형식을 함께 사용하는 것은 안전하지 않습니다.
-C:\Users\d\Desktop\c_git\SUNGIN99\NetworkTermProejct_Client\PrjClient.cpp(504,32): warning C4996: 'inet_addr': Use inet_pton() or InetPton() instead or define _WINSOCK_DEPRECATED_NO_WARNINGS to disable deprecated API warnings
-C:\Users\d\Desktop\c_git\SUNGIN99\NetworkTermProejct_Client\PrjClient.cpp(519,3): warning C4996: 'WSAStringToAddressA': Use WSAStringToAddressW() instead or define _WINSOCK_DEPRECATED_NO_WARNINGS to disable deprecated API warnings
-C:\Users\d\Desktop\c_git\SUNGIN99\NetworkTermProejct_Client\PrjClient.cpp(732,33): warning C4996: 'inet_addr': Use inet_pton() or InetPton() instead or define _WINSOCK_DEPRECATED_NO_WARNINGS to disable deprecated API warnings
-C:\Users\d\Desktop\c_git\SUNGIN99\NetworkTermProejct_Client\PrjClient.cpp(815,34): warning C4996: 'inet_addr': Use inet_pton() or InetPton() instead or define _WINSOCK_DEPRECATED_NO_WARNINGS to disable deprecated API warnings
-C:\Users\d\Desktop\c_git\SUNGIN99\NetworkTermProejct_Client\PrjClient.cpp(868,2): warning C4996: 'WSAStringToAddressA': Use WSAStringToAddressW() instead or define _WINSOCK_DEPRECATED_NO_WARNINGS to disable deprecated API warnings
-C:\Users\d\Desktop\c_git\SUNGIN99\NetworkTermProejct_Client\PrjClient.cpp(958,2): warning C4996: 'WSAStringToAddressA': Use WSAStringToAddressW() instead or define _WINSOCK_DEPRECATED_NO_WARNINGS to disable deprecated API warnings
-C:\Users\d\Desktop\c_git\SUNGIN99\NetworkTermProejct_Client\PrjClient.cpp(1179,2): warning C4996: 'vsprintf': This function or variable may be unsafe. Consider using vsprintf_s instead. To disable deprecation, use _CRT_SECURE_NO_WARNINGS. See online help for details.
-C:\Users\d\Desktop\c_git\SUNGIN99\NetworkTermProejct_Client\PrjClient.cpp(1195,2): warning C4996: 'vsprintf': This function or variable may be unsafe. Consider using vsprintf_s instead. To disable deprecation, use _CRT_SECURE_NO_WARNINGS. See online help for details.
-  PrjClient.vcxproj -> C:\Users\d\Desktop\c_git\SUNGIN99\NetworkTermProejct_Client\Debug\PrjClient.exe
+﻿  PrjClient.vcxproj -> C:\Users\d\Desktop\c_git\SUNGIN99\NetworkTermProejct_Client\Debug\PrjClient.exe
