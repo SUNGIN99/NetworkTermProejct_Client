@@ -8,7 +8,10 @@
 #include "resource.h"
 #include <Commctrl.h>
 #include <time.h>
-
+// 사용자 정의 윈도우 메시지
+#define WM_DRAWIT   (WM_USER+1) 
+/* <------------------------- [0]: 상수 Constant ------------------------> */
+// 1) 통신정보 IP, PORT
 #define MULTICAST_SEND_IPv4 "235.7.8.1"
 #define MULTICASTIPv4 "235.7.8.2"
 
@@ -20,12 +23,15 @@
 #define SERVERPORT  9000
 #define REMOTEPORT  9000
 
-#define BUFSIZE     280                   // 전송 메시지 전체 크기
-#define MSGSIZE     (BUFSIZE-sizeof(int)-ID_SIZE-CHECK_WHO-TIME_SIZE)   // 채팅 메시지 최대 길이
-#define ID_SIZE     20
-#define CHECK_WHO   1
-#define TIME_SIZE   23
+// 2) 전송 메세지 크기
+#define BUFSIZE     284												 // 구조체 크기 (기본 통신 고정 길이)
+#define MSGSIZE     (BUFSIZE-(sizeof(int)*2)-ID_SIZE-CHECK_WHO-TIME_SIZE)// 보내는 채팅 메세지 사이즈   
+#define ID_SIZE     20												 // 클라이언트 ID (문자열 길이)
+#define CHECK_WHO   1												 // 서버 보낸 식별 글
+#define TIME_SIZE   23												 // 보낸 시간 정보 길이
 
+// 3) 전송 메세지 타입
+// 3-1) 기본 메세지 전송 정보
 #define CHATTING    2000                   // 메시지 타입: 채팅
 #define DRAWLINE    2001                   // 메시지 타입: 선 그리기
 #define DRAWSTRA    2002				   // 메시지 타입: 직선 그리기
@@ -34,36 +40,33 @@
 #define DRAWCIRC    2005				   // 메시지 타입: 원 그리기
 #define DRAWERAS    2006				   // 메시지 타입: 지우개
 
+// 3-2) 서버 Controll 메세지 전송 정보
 #define ACCESS	    3000				   // 메시지 타입: 클라이언트 아이디 서버에 최초 전송
 #define KICKOUT     3001
 #define SERVERMSG	3002
 #define READCHECK  	4000
+/* <------------------------- [0]: 상수 Constant ------------------------> */
 
-#define WM_DRAWIT   (WM_USER+1)            // 사용자 정의 윈도우 메시지
-
-// 공통 메시지 형식
-// sizeof(COMM_MSG) == 280
-struct COMM_MSG
-{
+// S-1) 서버로부터 받는 메세지 포인터
+// sizeof(COMM_MSG) == 284
+struct COMM_MSG{
 	int  type;
-	char dummy[MSGSIZE+ID_SIZE+CHECK_WHO+TIME_SIZE];
+	char dummy[BUFSIZE-4];
 };
 
-// 채팅 메시지 형식
-// sizeof(CHAT_MSG) == 280
-struct CHAT_MSG
-{
+// S-2) 채팅 메시지 정보 구조체
+// sizeof(CHAT_MSG) == 284
+struct CHAT_MSG{
 	int  type;
 	char client_id[ID_SIZE];
 	char buf[MSGSIZE];
 	char whenSent[TIME_SIZE];
-	char whoSent;
+	int whoSent;
 };
 
-// 선 그리기 메시지 형식
-// sizeof(DRAWLINE_MSG) == 280
-struct DRAWLINE_MSG
-{
+// S-3) 그림 정보 포함 구조체
+// sizeof(DRAWLINE_MSG) == 284
+struct DRAWLINE_MSG{
 	int  type;
 	int  color;
 	int  x0, y0;
@@ -71,117 +74,115 @@ struct DRAWLINE_MSG
 	int  width;
 	int  r;
 	char dummy[BUFSIZE - 25];
-	char whoSent;
+	int whoSent;
 };
 
-//<수정> 최초 연결 설정시 보내는 데이터 형식
-struct INIT_MSG {
-	int type;
-	char client_id[ID_SIZE];
-	char buf[MSGSIZE];
-	char whoSent;
-};
-
-// UDP 소켓 파라미터 <수정>
-struct SOCKET_SendnRecv {
-	SOCKET recv;
-	SOCKET send;
-};
-
+/* <----------------- [1]: 전역변수 ------------------>*/
+// 1) TCP소켓 전역변수
+static SOCKET        g_sock;
+// 2) UDP소켓 전역변수 
 static SOCKET	     listen_sock_UDPv4;
 static SOCKET	     send_sock_UDPv4;
 static SOCKET	     listen_sock_UDPv6;
-static SOCKET	     send_sock_UDPv6; // UDP소켓 전역변수 <수정>
-
-static HINSTANCE     g_hInst; // 응용 프로그램 인스턴스 핸들
-static HWND          g_hDrawWnd; // 그림을 그릴 윈도우
-static HWND          g_hButtonSendMsg; // '메시지 전송' 버튼
-static HWND          g_hEditStatus; // 받은 메시지 출력 (상대방)
-static char          g_ipaddr[64]; // 서버 IP 주소
-static u_short       g_port; // 서버 포트 번호
-static BOOL          g_isIPv6; // IPv4 or IPv6 주소?
-static HANDLE        g_hClientThread; // 스레드 핸들
-static volatile BOOL g_bStart; // 통신 시작 여부
-static SOCKET        g_sock; // 클라이언트 소켓
-
-static HANDLE        g_hReadEvent, g_hWriteEvent; // 이벤트 핸들
-
-static CHAT_MSG      g_chatmsg; // 채팅 메시지 저장
-static DRAWLINE_MSG  g_drawmsg; // 선 그리기 메시지 저장
-static int           g_drawcolor; // 선 그리기 색상
-static int           g_drawr; // 반지름 저장
-static HWND			 hEditUserID;//사용자 ID
-
-// 수정
-static CHAT_MSG		g_initmsg;
-static CHAT_MSG		kakaoTalk1;
-static int			userReaded;
-static HWND			g_EditUserRead;
-
-static HWND			g_hEditStatus2; // 보낸 메시지 출력 (내가 보냄)
+static SOCKET	     send_sock_UDPv6; 
+// 3) 소켓 주소 정보 (IP, Port, Family)
+static char          g_ipaddr[64];					// 서버 IP 주소
+static u_short       g_port;						// 서버 포트 번호
+static BOOL          g_isIPv6;						// IPv4 or IPv6 주소?
 static BOOL			g_isUDP; // 체크하면 UDP, 아니면 그냥 TCP
-static BOOL			g_boardValid; // 현재 그림판 활성화 상태
+// 4) 스레드 핸들(소켓 통신용)
+static HANDLE        g_hClientThread; 
+static HANDLE        g_hReadEvent, g_hWriteEvent;	// 이벤트 핸들
+static volatile BOOL g_bStart;						// 통신 시작 여부
+
+// 5) 윈도우 전역 변수
+static HINSTANCE     g_hInst;						// 응용 프로그램 인스턴스 핸들
+static HWND          g_hDrawWnd;					// 그림판 윈도우
+static HWND          g_hButtonSendMsg;				// '메시지 전송' 버튼
+static HWND          g_hEditRecv;					// 받은 메시지 출력 (상대방)
+static HWND			 g_hEditSend;				// 보낸 메시지 출력 (내가 보냄)
+static HWND			 g_EditUserRead;				// (카카오톡 1) 읽음 알림메세지 출력
+static BOOL			 g_boardValid;					// 현재 그림판 활성화 상태
+
+// 6) 통신 메세지 정보
+static HWND			 hEditUserID;					// 사용자 ID
+static CHAT_MSG      g_chatmsg;						// 기본 채팅메세지 프로토콜 형태
+static DRAWLINE_MSG  g_drawmsg;						// 그림 정보 메세지 프로토콜 형태
+static int           g_drawcolor;					// 선 색상
+static int           g_drawr;						// 반지름 크기
+
+static int			 clientUniqueID;				// 클라이언트 식별 번호
+static char			 strUniqueID[5] = { 0,0,0,0,0 };
+// 7) 추가 채팅 프로토콜
+static CHAT_MSG		g_initmsg;						// 최초 전송 메세지(메세지 내용없이 사용자 ID를 보냄)
+static CHAT_MSG		kakaoTalk1;						// 카카오톡 1 기능을 위한 메세지(g_chatmsg)에 Focus를 받으면 전송
+/* <----------------- [1]: 전역변수 ------------------>*/
+
+
+/* <----------------- [2]: 사용자 정의 함수 ------------------>*/
+// 1) TCP 소켓 통신 스레드
+DWORD WINAPI ClientMain(LPVOID arg);
+DWORD WINAPI ReadThread(LPVOID arg);
+DWORD WINAPI WriteThread(LPVOID arg);
+// 1-1) TCP Receive 수신 메세지 처리 함수
+int recvn(SOCKET s, char* buf, int len, int flags);
+
+// 2) UDP 소켓 통신 스레드
 DWORD WINAPI WriteThread_UDP(LPVOID);
 DWORD WINAPI ReadThread_UDP(LPVOID);
 DWORD WINAPI ClientMainUDP(LPVOID);
 DWORD WINAPI WriteThread_UDPv6(LPVOID);
 DWORD WINAPI ReadThread_UDPv6(LPVOID);
-
-char* getCurrentTime();
-char* vaText(char* fmt, ...);
-
+// 3) 접속을 원하는 서버 IP
 SOCKADDR_IN remoteaddr_v4;
 SOCKADDR_IN6 remoteaddr_v6;
 
+// 4) WINAPI 프로시저 (CALLBACK 함수)
+BOOL CALLBACK DlgProc(HWND, UINT, WPARAM, LPARAM);		// 대화상자 프로시저
+LRESULT CALLBACK WndProc(HWND, UINT, WPARAM, LPARAM);	// 자식 윈도우 프로시저
 
-// 대화상자 프로시저
-BOOL CALLBACK DlgProc(HWND, UINT, WPARAM, LPARAM);
-// 소켓 통신 스레드 함수
-DWORD WINAPI ClientMain(LPVOID arg);
-DWORD WINAPI ReadThread(LPVOID arg);
-DWORD WINAPI WriteThread(LPVOID arg);
-// 자식 윈도우 프로시저
-LRESULT CALLBACK WndProc(HWND, UINT, WPARAM, LPARAM);
-
-// 편집 컨트롤 출력 함수
-void DisplayText_Recv(char* fmt, ...);
-void DisplayText_Send(char* fmt, ...);
-void DisplayText_KAKAOTALKONE(char* fmt, ...);
-char* vaText(char* fmt, ...);
-
-// 사용자 정의 데이터 수신 함수
-int recvn(SOCKET s, char* buf, int len, int flags);
-// 오류 출력 함수
+// 5) EditControll 출력 함수
+void DisplayText_Recv(char* fmt, ...);  // 수신 EditControll 출력 메세지
+void DisplayText_Send(char* fmt, ...);  // 송신 EditControll 출력 메세지
+void DisplayText_KAKAOTALKONE(char* fmt, ...); // 읽음 알림 EditControll 출력 메세지
+char* DatetoString(char* fmt, ...);  // 날짜 form 반환 함수
+char* getCurrentTime();				 // 날짜 반환 함수
+// 6) 오류 출력 함수
 void err_quit(char* msg);
 void err_display(char* msg);
+/* <----------------- [2]: 사용자 정의 함수 ------------------>*/
 
-// 메인 함수
-int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
-	LPSTR lpCmdLine, int nCmdShow)
-{
-	// 윈속 초기화
+
+/* <----------------- [3]: WinMain ------------------>*/
+int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow){
+	srand(time(NULL));
+	clientUniqueID = (rand() * 19 - 19) % 256;
+	itoa(clientUniqueID, strUniqueID, 10);
+	// 1) 윈속 초기화
 	WSADATA wsa;
 	if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) return 1;
 
-	// 이벤트 생성
+	// 2) 스레드 Read/Write 이벤트 핸들 생성
 	g_hReadEvent = CreateEvent(NULL, FALSE, TRUE, NULL);
 	if (g_hReadEvent == NULL) return 1;
 	g_hWriteEvent = CreateEvent(NULL, FALSE, FALSE, NULL);
 	if (g_hWriteEvent == NULL) return 1;
 
-	// 변수 초기화(일부)
-	g_chatmsg.type = CHATTING;
-	g_drawmsg.type = DRAWLINE;
+	// 3) 전송 메세지 전역변수 최초 초기화
+	g_chatmsg.type = CHATTING;  // 채팅 메세지 타입 = CHATTING (2000)
+	g_drawmsg.type = DRAWLINE;  // 그림 메세지 타입 = DRAWLINE (2001)
 	g_drawmsg.color = RGB(0, 0, 0);
 	g_drawmsg.width = 5;
 
-	//수정
-	g_initmsg.type = ACCESS;
+	// 4) 서버 접속 성공시 최초 전송 메세지(사용자 식별정보)
+	g_initmsg.type = ACCESS;    // 접속 메세지 타입 = ACCESS (3000)
 	strncpy(g_initmsg.buf, "CLIENT_ACCESS", MSGSIZE);
 	kakaoTalk1.type = READCHECK;
 	strncpy(kakaoTalk1.buf, "가 채팅에 들어왔습니다!(메세지를 읽음)", MSGSIZE);
 
-	// 대화상자 생성
+	g_chatmsg.whoSent = g_drawmsg.whoSent = g_initmsg.whoSent = kakaoTalk1.whoSent = clientUniqueID;
+
+	// 5) 대화상자 인스턴스 생성
 	g_hInst = hInstance;
 	DialogBox(hInstance, MAKEINTRESOURCE(IDD_DIALOG1), NULL, DlgProc);
 
@@ -192,70 +193,81 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
 	// 윈속 종료
 	WSACleanup();
 	return 0;
-}
+}/* <----------------- [3]: WinMain ------------------>*/
 
-// 대화상자 프로시저
+/* <----------------- [4]: 다이얼로그 박스 프로시저 ------------------>*/
 BOOL CALLBACK DlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
-	static HWND hButtonIsIPv6;
-	static HWND hEditIPaddr;
-	static HWND hEditPort;
-	static HWND hButtonConnect;
-	static HWND hEditMsg;
-	static HWND hColorRed;
-	static HWND hColorGreen;
-	static HWND hColorBlue;
-	static HWND hColorBlack;
-	static HWND hColorPink;
-	static HWND hLineWidth;
-	
-	static HWND hBoardClear;
-	static HWND hNewBoard;
-	static HWND hDelBoard;
+	// 1) 서버 통신 관련 Window
+	static HWND hUDPCheck;			// UDP로 접속여부 CheckBox
+	static HWND hButtonIsIPv6;		// IPv6 패밀리 선택
+	static HWND hEditIPaddr;		// IP주소 입력 EditControll
+	static HWND hEditPort;			// Port번호 입력 EditControll
+	static HWND hButtonConnect;		// 연결 버튼
+	static HWND hEditMsg;			// 전송할 메세지 EditControll
 
-	// 수정
-	static HWND hUDPCheck;
+	static HWND hUserUniqueID;		// 유저 고유 번호
+
+	// 2) 그림판 관련 Window
+	static HWND hColorRed;			// 선 색 빨간색 RadioBtn
+	static HWND hColorGreen;		// 선 색 초록색 RadioBtn
+	static HWND hColorBlue;			// 선 색 파란색 RadioBtn
+	static HWND hColorBlack;		// 선 색 검은색 RadioBtn
+	static HWND hColorPink;			// 선 색 분홍색 RadioBtn
+	static HWND hLineWidth;			// 선 굵기 Scroll
+
+	static HWND hBoardClear;		// 그림판 비우기   Btn
+	static HWND hNewBoard;			// 그림판 새로생성 Btn
+	static HWND hDelBoard;			// 그림판 지우기   Btn
+
+	
 	switch (uMsg) {
 	case WM_INITDIALOG:
-		// 컨트롤 핸들 얻기
+		// A) 컨트롤 핸들 가져오기
+		// A-1) 통신 관련 Window
 		hButtonIsIPv6 = GetDlgItem(hDlg, IDC_ISIPV6);
 		hEditIPaddr = GetDlgItem(hDlg, IDC_IPADDR);
 		hEditPort = GetDlgItem(hDlg, IDC_PORT);
-		hButtonConnect = GetDlgItem(hDlg, IDC_CONNECT);
-		g_hButtonSendMsg = GetDlgItem(hDlg, IDC_SENDMSG);
-		hEditMsg = GetDlgItem(hDlg, IDC_MSG);
-		g_hEditStatus = GetDlgItem(hDlg, IDC_STATUS);
+		hButtonConnect = GetDlgItem(hDlg, IDC_CONNECT);			// 연결 Btn
+		g_hButtonSendMsg = GetDlgItem(hDlg, IDC_SENDMSG);		// 전송 Btn
+		hEditMsg = GetDlgItem(hDlg, IDC_MSG);					// 보낼 메세지 EditControll
+		hEditUserID = GetDlgItem(hDlg, IDC_USERID);				// ClientID EditControll
+		hUDPCheck = GetDlgItem(hDlg, IDC_UDPCHECK);				// UDP 접속여부
+		hUserUniqueID = GetDlgItem(hDlg, IDC_UNIQUEID);			// 유저 식별 번호
+
+		// A-2) 메세지 관련 Window(송/수신, 읽기알림 메세지 출력부)
+		g_hEditRecv = GetDlgItem(hDlg, IDC_STATUS);
+		g_hEditSend = GetDlgItem(hDlg, IDC_STATUS2);
+		g_EditUserRead = (GetDlgItem(hDlg, IDC_ONE));
+
+		// A-3) 그림판 기능 Window
 		hColorRed = GetDlgItem(hDlg, IDC_COLORRED);
 		hColorGreen = GetDlgItem(hDlg, IDC_COLORGREEN);
 		hColorBlue = GetDlgItem(hDlg, IDC_COLORBLUE);
 		hColorBlack = GetDlgItem(hDlg, IDC_COLORBLACK);
 		hColorPink = GetDlgItem(hDlg, IDC_COLORPINK);
-		hEditUserID = GetDlgItem(hDlg, IDC_USERID);
 		hLineWidth = GetDlgItem(hDlg, IDC_THICK);
-
-		// 수정
-		g_hEditStatus2 = GetDlgItem(hDlg, IDC_STATUS2);
-		hUDPCheck = GetDlgItem(hDlg, IDC_UDPCHECK);
 		hBoardClear = (GetDlgItem(hDlg, IDC_BOARDCLEAR));
 		hNewBoard = (GetDlgItem(hDlg, IDC_NEWBOARD));
 		hDelBoard =(GetDlgItem(hDlg, IDC_DELBOARD));
-		g_EditUserRead = (GetDlgItem(hDlg, IDC_ONE));
+		
 
-		// 컨트롤 초기화
-		SendMessage(hEditMsg, EM_SETLIMITTEXT, MSGSIZE, 0);
-		SendMessage(hEditUserID, EM_SETLIMITTEXT, ID_SIZE-1, 0);
-		EnableWindow(g_hButtonSendMsg, FALSE);
-		SetDlgItemText(hDlg, IDC_IPADDR, SERVERIPV4);
-		SetDlgItemInt(hDlg, IDC_PORT, SERVERPORT, FALSE);
-		SendMessage(hColorBlack, BM_SETCHECK, BST_CHECKED, 0);
-		SendMessage(hColorRed, BM_SETCHECK, BST_UNCHECKED, 0);
-		SendMessage(hColorGreen, BM_SETCHECK, BST_UNCHECKED, 0);
-		SendMessage(hColorBlue, BM_SETCHECK, BST_UNCHECKED, 0);
-		SendMessage(hColorPink, BM_SETCHECK, BST_UNCHECKED, 0);
-		SendMessage(hLineWidth, TBM_SETPOS, TRUE, 5);
+		// B) 컨트롤 초기화
+		SendMessage(hEditMsg, EM_SETLIMITTEXT, MSGSIZE, 0);			// 1. 메세지 입력 사이즈 제한
+		SendMessage(hEditUserID, EM_SETLIMITTEXT, ID_SIZE-1, 0);	// 2. 클라이언트 ID 입력 사이즈 제한
+		EnableWindow(g_hButtonSendMsg, FALSE);						// 3. 전송 버튼 비활성화
+		SetDlgItemText(hDlg, IDC_IPADDR, SERVERIPV4);				// 4. 서버 주소 EditControll IPv4 주소로 초기화
+		SetDlgItemInt(hDlg, IDC_PORT, SERVERPORT, FALSE);			// 5. 서버 포트 초기화
+		SendMessage(hColorBlack, BM_SETCHECK, BST_CHECKED, 0);      // 6. 펜 색깔 초기화 (검은색으로)
+		SendMessage(hColorRed, BM_SETCHECK, BST_UNCHECKED, 0);		// 7. 다른 펜은 비활성화
+		SendMessage(hColorGreen, BM_SETCHECK, BST_UNCHECKED, 0);	// 8.
+		SendMessage(hColorBlue, BM_SETCHECK, BST_UNCHECKED, 0);		// 9.
+		SendMessage(hColorPink, BM_SETCHECK, BST_UNCHECKED, 0);		// 10. 
+		SendMessage(hLineWidth, TBM_SETPOS, TRUE, 5);				// 11. 펜 굵기 설정
 		SendMessage(hLineWidth, TBM_SETRANGE, (WPARAM)1, (LPARAM)MAKELONG(1, 10));
+		SetDlgItemText(hDlg, IDC_UNIQUEID, strUniqueID);
 
-		// 윈도우 클래스 등록
+		// C) 윈도우 클래스
 		WNDCLASS wndclass;
 		wndclass.style = CS_HREDRAW | CS_VREDRAW;
 		wndclass.lpfnWndProc = WndProc;
@@ -266,13 +278,13 @@ BOOL CALLBACK DlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
 		wndclass.hCursor = LoadCursor(NULL, IDC_ARROW);
 		wndclass.hbrBackground = (HBRUSH)GetStockObject(WHITE_BRUSH);
 		wndclass.lpszMenuName = NULL;
-		wndclass.lpszClassName = "MyWndClass";
+		wndclass.lpszClassName = "DrawBoardClass";
 		if (!RegisterClass(&wndclass)) return 1;
 		g_boardValid = FALSE;
 
-		// 자식 윈도우 생성
+		// C-1) 자식 윈도우 생성
 		if (g_boardValid == FALSE) {
-			g_hDrawWnd = CreateWindow("MyWndClass", "그림 그릴 윈도우", WS_CHILD,
+			g_hDrawWnd = CreateWindow("DrawBoardClass", "DrawBoardWindow", WS_CHILD,
 				450, 60, 425, 508, hDlg, (HMENU)NULL, g_hInst, NULL);
 			if (g_hDrawWnd == NULL) return 1;
 			ShowWindow(g_hDrawWnd, SW_SHOW);
@@ -284,16 +296,16 @@ BOOL CALLBACK DlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
 
 		return TRUE;
 
-		//굵기
-	case WM_HSCROLL:
+	// D) 윈도우 컨트롤 핸들 처리 부
+	case WM_HSCROLL: // 1. 굵기 조절 스크롤
 		g_drawmsg.width = SendDlgItemMessage(hDlg, IDC_THICK, TBM_GETPOS, 0, 0);
 		return 0;
 
-	case WM_COMMAND:
+	case WM_COMMAND: // 2. Window 발생 이벤트 처리 
 		switch (LOWORD(wParam)) {
 
-		case IDC_MSG:
-			if (HIWORD(wParam) == EN_SETFOCUS) {
+		case IDC_MSG: // 2-1) 사용자 메세지 전송 EditControll 
+			if (HIWORD(wParam) == EN_SETFOCUS) { // EditControll 포커스 얻을 시에(칠 준비하면, 톡방 들어갈시?)
 				strncpy(kakaoTalk1.whenSent, getCurrentTime(), 23);
 				if (g_isUDP == false) {
 					send(g_sock, (char*)&kakaoTalk1, BUFSIZE, 0);
@@ -309,15 +321,12 @@ BOOL CALLBACK DlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
 					}
 				}
 			}
-			else if (HIWORD(wParam) == EN_KILLFOCUS) {
-				userReaded = 0;
-			}
 			return TRUE;
 
-		case IDC_BOARDCLEAR: // 그림판 비우기
+		case IDC_BOARDCLEAR: // 2-2) 그림판 비우기
 			if (g_boardValid == TRUE) {
 				DestroyWindow(g_hDrawWnd);
-				g_hDrawWnd = CreateWindow("MyWndClass", "그림 그릴 윈도우", WS_CHILD,
+				g_hDrawWnd = CreateWindow("DrawBoardClass", "DrawBoardWindow", WS_CHILD,
 					450, 60, 425, 415, hDlg, (HMENU)NULL, g_hInst, NULL);
 				if (g_hDrawWnd == NULL) return 1;
 				ShowWindow(g_hDrawWnd, SW_SHOW);
@@ -329,9 +338,9 @@ BOOL CALLBACK DlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
 
 			return TRUE;
 
-		case IDC_NEWBOARD:
+		case IDC_NEWBOARD: // 2-2) 그림판 새로생성
 			if (g_boardValid == FALSE) {
-				g_hDrawWnd = CreateWindow("MyWndClass", "그림 그릴 윈도우", WS_CHILD,
+				g_hDrawWnd = CreateWindow("DrawBoardClass", "DrawBoardWindow", WS_CHILD,
 					450, 60, 425, 415, hDlg, (HMENU)NULL, g_hInst, NULL);
 				if (g_hDrawWnd == NULL) return 1;
 				ShowWindow(g_hDrawWnd, SW_SHOW);
@@ -518,7 +527,7 @@ BOOL CALLBACK DlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
 		return FALSE;
 	}
 	return FALSE;
-}
+}/* <----------------- [4]: 다이얼로그 박스 프로시저 ------------------>*/
 
 // 소켓 통신 스레드 함수
 DWORD WINAPI ClientMain(LPVOID arg)
@@ -600,24 +609,28 @@ DWORD WINAPI ReadThread(LPVOID arg)
 		retval = recvn(g_sock, (char*)&comm_msg, BUFSIZE, 0);
 
 		if (retval == 0 || retval == SOCKET_ERROR || comm_msg.type == KICKOUT ) {
-			break;
+			chat_msg == (CHAT_MSG*)&comm_msg;
+			if (!strcmp(chat_msg->client_id, g_chatmsg.client_id) && chat_msg->whoSent == g_chatmsg.whoSent)
+				break;
+			else
+				continue;
 		}
 		if (comm_msg.type == CHATTING) {
 			chat_msg = (CHAT_MSG*)&comm_msg;
 			DisplayText_Recv("\r\n");DisplayText_Send("\r\n");
-			if (strcmp(chat_msg->client_id, g_chatmsg.client_id) == 0) {
+			if (!strcmp(chat_msg->client_id, g_chatmsg.client_id) && chat_msg->whoSent == g_chatmsg.whoSent) {
 				DisplayText_Send("[%s] %s\r\n", chat_msg->client_id, chat_msg->buf);
 				DisplayText_Recv("%s\r\n", chat_msg->whenSent);
 			}
 			else
 			{
-				DisplayText_Recv("[%s] %s\r\n", chat_msg->client_id, chat_msg->buf);
+				DisplayText_Recv("[%s(%d)] %s\r\n", chat_msg->client_id, chat_msg->whoSent, chat_msg->buf);
 				DisplayText_Send("%s\r\n", chat_msg->whenSent);
 			}
 		}
 		else if (comm_msg.type == READCHECK) {
 			chat_msg = (CHAT_MSG*)&comm_msg;
-			DisplayText_KAKAOTALKONE("[%s]-[%s]%s\r\n", chat_msg->whenSent, chat_msg->client_id, chat_msg->buf);
+			DisplayText_KAKAOTALKONE("[%s]-[%s(%d)]%s\r\n", chat_msg->whenSent, chat_msg->client_id, chat_msg->whoSent, chat_msg->buf);
 		}
 		else if (comm_msg.type == DRAWERAS) {
 			draw_msg = (DRAWLINE_MSG*)&comm_msg;
@@ -780,7 +793,9 @@ DWORD WINAPI ReadThread_UDP(LPVOID arg) {
 		addrlen = sizeof(peeraddr);
 		retvalUDP = recvfrom(listen_sock_UDPv4, (char*)&comm_msg, BUFSIZE, 0, (SOCKADDR*)&peeraddr, &addrlen);
 		if (retvalUDP == 0 || retvalUDP == SOCKET_ERROR || comm_msg.type == KICKOUT) {
-			if(strcmp(comm_msg.dummy , g_chatmsg.client_id) == 0)
+			chat_msg == (CHAT_MSG*)&comm_msg;
+			DisplayText_Send("%d %d\r\n", chat_msg->whoSent, g_chatmsg.whoSent);
+			if (!strcmp(chat_msg->client_id, g_chatmsg.client_id) && chat_msg->whoSent == g_chatmsg.whoSent)
 				break;
 			else
 				continue;
@@ -788,19 +803,19 @@ DWORD WINAPI ReadThread_UDP(LPVOID arg) {
 		if (comm_msg.type == CHATTING) {
 			DisplayText_Recv("\r\n"); DisplayText_Send("\r\n");
 			chat_msg = (CHAT_MSG*)&comm_msg;
-			if (strcmp(chat_msg->client_id, g_chatmsg.client_id) == 0) {
+			if (!strcmp(chat_msg->client_id, g_chatmsg.client_id) && chat_msg->whoSent == g_chatmsg.whoSent) {
 				DisplayText_Send("[%s] %s\r\n", chat_msg->client_id, chat_msg->buf);
 				DisplayText_Recv("%s\r\n", chat_msg->whenSent);
 			}
 			else
 			{
-				DisplayText_Recv("[%s] %s\r\n", chat_msg->client_id, chat_msg->buf);
+				DisplayText_Recv("[%s(%d)] %s\r\n", chat_msg->client_id, chat_msg->whoSent, chat_msg->buf);
 				DisplayText_Send("%s\r\n", chat_msg->whenSent);
 			}
 		}
 		else if (comm_msg.type == READCHECK) {
 			chat_msg = (CHAT_MSG*)&comm_msg;
-			DisplayText_KAKAOTALKONE("[%s]-[%s]%s\r\n", chat_msg->whenSent, chat_msg->client_id, chat_msg->buf);
+			DisplayText_KAKAOTALKONE("[%s]-[%s(%d)]%s\r\n", chat_msg->whenSent, chat_msg->client_id, chat_msg->whoSent, chat_msg->buf);
 		}
 		else if (comm_msg.type == DRAWERAS) {
 			draw_msg = (DRAWLINE_MSG*)&comm_msg;
@@ -927,24 +942,29 @@ DWORD WINAPI ReadThread_UDPv6(LPVOID arg) {
 		addrlen = sizeof(peeraddr);
 		retvalUDP = recvfrom(listen_sock_UDPv6, (char*)&comm_msg, BUFSIZE, 0, (SOCKADDR*)&peeraddr, &addrlen);
 		if (retvalUDP == 0 || retvalUDP == SOCKET_ERROR || comm_msg.type == KICKOUT) {
-			break;
+			chat_msg == (CHAT_MSG*)&comm_msg;
+			if (!strcmp(chat_msg->client_id, g_chatmsg.client_id) && chat_msg->whoSent == g_chatmsg.whoSent)
+				break;
+			else
+				continue;
 		}
+
 		if (comm_msg.type == CHATTING) {
 			DisplayText_Recv("\r\n"); DisplayText_Send("\r\n");
 			chat_msg = (CHAT_MSG*)&comm_msg;
-			if (strcmp(chat_msg->client_id, g_chatmsg.client_id) == 0) {
+			if (!strcmp(chat_msg->client_id, g_chatmsg.client_id) && chat_msg->whoSent == g_chatmsg.whoSent) {
 				DisplayText_Send("[%s] %s\r\n", chat_msg->client_id, chat_msg->buf);
 				DisplayText_Recv("%s\r\n", chat_msg->whenSent);
 			}
 			else
 			{
-				DisplayText_Recv("[%s] %s\r\n", chat_msg->client_id, chat_msg->buf);
+				DisplayText_Recv("[%s(%d)] %s\r\n", chat_msg->client_id, chat_msg->whoSent, chat_msg->buf);
 				DisplayText_Send("%s\r\n", chat_msg->whenSent);
 			}
 		}
 		else if (comm_msg.type == READCHECK) {
 			chat_msg = (CHAT_MSG*)&comm_msg;
-			DisplayText_KAKAOTALKONE("[%s]-[%s]%s\r\n", chat_msg->whenSent, chat_msg->client_id, chat_msg->buf);
+			DisplayText_KAKAOTALKONE("[%s]-[%s(%d)]%s\r\n", chat_msg->whenSent, chat_msg->client_id, chat_msg->whoSent, chat_msg->buf);
 		}
 		else if (comm_msg.type == DRAWERAS) {
 			draw_msg = (DRAWLINE_MSG*)&comm_msg;
@@ -1045,7 +1065,6 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 	static int x0, y0;
 	static int x1, y1;
 	static BOOL bDrawing = FALSE;
-	userReaded = 0;
 	switch (uMsg) {
 	case WM_CREATE:
 		hDC = GetDC(hWnd);
@@ -1220,12 +1239,12 @@ char* getCurrentTime() {
 #endif
 	if (pLocal == NULL) return NULL;
 
-	return vaText("%04d-%02d-%02d T%02d:%02d:%02d",
+	return DatetoString("%04d-%02d-%02d T%02d:%02d:%02d",
 		pLocal->tm_year + 1900, pLocal->tm_mon + 1, pLocal->tm_mday,
 		pLocal->tm_hour, pLocal->tm_min, pLocal->tm_sec);
 }
 
-char* vaText(char* fmt, ...) {
+char* DatetoString(char* fmt, ...) {
 	va_list arg;
 	va_start(arg, fmt);
 
@@ -1245,9 +1264,9 @@ void DisplayText_Recv(char* fmt, ...)
 	char cbuf[1024];
 	vsprintf(cbuf, fmt, arg);
 
-	int nLength = GetWindowTextLength(g_hEditStatus);
-	SendMessage(g_hEditStatus, EM_SETSEL, nLength, nLength);
-	SendMessage(g_hEditStatus, EM_REPLACESEL, FALSE, (LPARAM)cbuf);
+	int nLength = GetWindowTextLength(g_hEditRecv);
+	SendMessage(g_hEditRecv, EM_SETSEL, nLength, nLength);
+	SendMessage(g_hEditRecv, EM_REPLACESEL, FALSE, (LPARAM)cbuf);
 
 	va_end(arg);
 }
@@ -1261,9 +1280,9 @@ void DisplayText_Send(char* fmt, ...)
 	char cbuf[1024];
 	vsprintf(cbuf, fmt, arg);
 
-	int nLength = GetWindowTextLength(g_hEditStatus2);
-	SendMessage(g_hEditStatus2, EM_SETSEL, nLength, nLength);
-	SendMessage(g_hEditStatus2, EM_REPLACESEL, FALSE, (LPARAM)cbuf);
+	int nLength = GetWindowTextLength(g_hEditSend);
+	SendMessage(g_hEditSend, EM_SETSEL, nLength, nLength);
+	SendMessage(g_hEditSend, EM_REPLACESEL, FALSE, (LPARAM)cbuf);
 
 	va_end(arg);
 }
