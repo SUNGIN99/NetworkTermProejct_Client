@@ -8,6 +8,8 @@
 #include "resource.h"
 #include <Commctrl.h>
 #include <time.h>
+#include <commdlg.h>
+
 // 사용자 정의 윈도우 메시지
 #define WM_DRAWIT   (WM_USER+1) 
 /* <------------------------- [0]: 상수 Constant ------------------------> */
@@ -28,23 +30,28 @@
 #define MSGSIZE     (BUFSIZE-(sizeof(int)*2)-ID_SIZE-CHECK_WHO-TIME_SIZE)// 보내는 채팅 메세지 사이즈   
 #define ID_SIZE     20												 // 클라이언트 ID (문자열 길이)
 #define CHECK_WHO   1												 // 서버 보낸 식별 글
-#define TIME_SIZE   23												 // 보낸 시간 정보 길이
+#define TIME_SIZE   23												 // 보낸 시간 정보 길이\
+
+#define FILE_SIZE   BUFSIZE - 4 - ID_SIZE
 
 // 3) 전송 메세지 타입
 // 3-1) 기본 메세지 전송 정보
-#define CHATTING    2000                   // 메시지 타입: 채팅
-#define DRAWLINE    2001                   // 메시지 타입: 선 그리기
-#define DRAWSTRA    2002				   // 메시지 타입: 직선 그리기
-#define DRAWTRIA    2003				   // 메시지 타입: 삼각형 그리기		
-#define DRAWRECT    2004				   // 메시지 타입: 사각형 그리기			
-#define DRAWCIRC    2005				   // 메시지 타입: 원 그리기
-#define DRAWERAS    2006				   // 메시지 타입: 지우개
+#define CHATTING    2000                   // type: 채팅
+#define DRAWLINE    2001                   // type: 선 그리기
+#define DRAWSTRA    2002				   // type: 직선 그리기
+#define DRAWTRIA    2003				   // type: 삼각형 그리기		
+#define DRAWRECT    2004				   // type: 사각형 그리기			
+#define DRAWCIRC    2005				   // type: 원 그리기
+#define DRAWERAS    2006				   // type: 지우개
 
 // 3-2) 서버 Controll 메세지 전송 정보
-#define ACCESS	    3000				   // 메시지 타입: 클라이언트 아이디 서버에 최초 전송
-#define KICKOUT     3001
-#define SERVERMSG	3002
-#define READCHECK  	4000
+#define ACCESS	    3000				   // type: 클라이언트 아이디 서버에 최초 전송
+#define KICKOUT     3001				   // type: 서버에서 추방 메세지
+
+#define READCHECK  	4000				   // type: 읽음 알림 메세지
+#define FILEINIT	4001
+#define FILEBYTE    4002				   // type: 파일전송 메세지
+#define FILEEND		4003
 /* <------------------------- [0]: 상수 Constant ------------------------> */
 
 // S-1) 서버로부터 받는 메세지 포인터
@@ -73,8 +80,14 @@ struct DRAWLINE_MSG{
 	int  x1, y1;
 	int  width;
 	int  r;
-	char dummy[BUFSIZE - 25];
+	char dummy[BUFSIZE - 28];
 	int whoSent;
+};
+
+struct FILE_MSG {
+	int type;
+	char client_id[ID_SIZE];
+	char buf[FILE_SIZE];
 };
 
 /* <----------------- [1]: 전역변수 ------------------>*/
@@ -109,7 +122,6 @@ static HWND			 hEditUserID;					// 사용자 ID
 static CHAT_MSG      g_chatmsg;						// 기본 채팅메세지 프로토콜 형태
 static DRAWLINE_MSG  g_drawmsg;						// 그림 정보 메세지 프로토콜 형태
 static int           g_drawcolor;					// 선 색상
-static int           g_drawr;						// 반지름 크기
 
 static int			 clientUniqueID;				// 클라이언트 식별 번호
 static char			 strUniqueID[5] = { 0,0,0,0,0 };
@@ -118,6 +130,14 @@ static CHAT_MSG		g_initmsg;						// 최초 전송 메세지(메세지 내용없이 사용자 ID를
 static CHAT_MSG		kakaoTalk1;						// 카카오톡 1 기능을 위한 메세지(g_chatmsg)에 Focus를 받으면 전송
 /* <----------------- [1]: 전역변수 ------------------>*/
 
+OPENFILENAME OFN; // file
+const UINT nFileNameMaxLen = MSGSIZE;
+WCHAR szFileName[nFileNameMaxLen];
+
+CHAT_MSG			fileinit_msg;// 파일송신자 식별 정보 및 파일 이름
+
+FILE_MSG			fileRecv; // 받은 파일 이진 버퍼
+FILE*				recvFile; // 받을 파일
 
 /* <----------------- [2]: 사용자 정의 함수 ------------------>*/
 // 1) TCP 소켓 통신 스레드
@@ -150,6 +170,8 @@ char* getCurrentTime();				 // 날짜 반환 함수
 // 6) 오류 출력 함수
 void err_quit(char* msg);
 void err_display(char* msg);
+
+char* getFileName(char* fullPath);
 /* <----------------- [2]: 사용자 정의 함수 ------------------>*/
 
 
@@ -180,7 +202,11 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 	kakaoTalk1.type = READCHECK;
 	strncpy(kakaoTalk1.buf, "가 채팅에 들어왔습니다!(메세지를 읽음)", MSGSIZE);
 
-	g_chatmsg.whoSent = g_drawmsg.whoSent = g_initmsg.whoSent = kakaoTalk1.whoSent = clientUniqueID;
+
+	// 추가) 파일 전송
+	fileinit_msg.type = FILEINIT;
+
+	g_chatmsg.whoSent = g_drawmsg.whoSent = g_initmsg.whoSent = kakaoTalk1.whoSent = fileinit_msg.whoSent = clientUniqueID;
 
 	// 5) 대화상자 인스턴스 생성
 	g_hInst = hInstance;
@@ -207,6 +233,7 @@ BOOL CALLBACK DlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
 	static HWND hEditMsg;			// 전송할 메세지 EditControll
 
 	static HWND hUserUniqueID;		// 유저 고유 번호
+	static HWND hFileName;
 
 	// 2) 그림판 관련 Window
 	static HWND hColorRed;			// 선 색 빨간색 RadioBtn
@@ -235,6 +262,8 @@ BOOL CALLBACK DlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
 		hUDPCheck = GetDlgItem(hDlg, IDC_UDPCHECK);				// UDP 접속여부
 		hUserUniqueID = GetDlgItem(hDlg, IDC_UNIQUEID);			// 유저 식별 번호
 
+		hFileName = GetDlgItem(hDlg, IDC_FILEMSG);  // 선택한 파일 이름
+
 		// A-2) 메세지 관련 Window(송/수신, 읽기알림 메세지 출력부)
 		g_hEditRecv = GetDlgItem(hDlg, IDC_STATUS);
 		g_hEditSend = GetDlgItem(hDlg, IDC_STATUS2);
@@ -247,9 +276,9 @@ BOOL CALLBACK DlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
 		hColorBlack = GetDlgItem(hDlg, IDC_COLORBLACK);
 		hColorPink = GetDlgItem(hDlg, IDC_COLORPINK);
 		hLineWidth = GetDlgItem(hDlg, IDC_THICK);
-		hBoardClear = (GetDlgItem(hDlg, IDC_BOARDCLEAR));
-		hNewBoard = (GetDlgItem(hDlg, IDC_NEWBOARD));
-		hDelBoard =(GetDlgItem(hDlg, IDC_DELBOARD));
+		hBoardClear = GetDlgItem(hDlg, IDC_BOARDCLEAR);
+		hNewBoard = GetDlgItem(hDlg, IDC_NEWBOARD);
+		hDelBoard =GetDlgItem(hDlg, IDC_DELBOARD);
 		
 
 		// B) 컨트롤 초기화
@@ -265,7 +294,7 @@ BOOL CALLBACK DlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
 		SendMessage(hColorPink, BM_SETCHECK, BST_UNCHECKED, 0);		// 10. 
 		SendMessage(hLineWidth, TBM_SETPOS, TRUE, 5);				// 11. 펜 굵기 설정
 		SendMessage(hLineWidth, TBM_SETRANGE, (WPARAM)1, (LPARAM)MAKELONG(1, 10));
-		SetDlgItemText(hDlg, IDC_UNIQUEID, strUniqueID);
+		SetDlgItemText(hDlg, IDC_UNIQUEID, strUniqueID);			// 12. 클라이언트 식별 번호 초기화
 
 		// C) 윈도우 클래스
 		WNDCLASS wndclass;
@@ -303,8 +332,52 @@ BOOL CALLBACK DlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
 
 	case WM_COMMAND: // 2. Window 발생 이벤트 처리 
 		switch (LOWORD(wParam)) {
+		case IDC_SELECTFILE:
+			memset(&OFN, 0, sizeof(OPENFILENAME));
+			OFN.lStructSize = sizeof(OPENFILENAME);
+			OFN.hwndOwner = hDlg;
+			OFN.lpstrFilter = TEXT("All Files(*.*)\0*.*\0");
 
-		case IDC_MSG: // 2-1) 사용자 메세지 전송 EditControll 
+			OFN.lpstrFile = (LPSTR)szFileName;
+			OFN.nMaxFile = nFileNameMaxLen;
+			if (0 != GetOpenFileName(&OFN))
+			{
+				SetWindowText(hFileName, OFN.lpstrFile);
+			}
+			return TRUE;
+
+		case IDC_SENDFILE:
+			char fileName[nFileNameMaxLen];
+			ZeroMemory(fileName, nFileNameMaxLen);
+			if (GetDlgItemText(hDlg, IDC_FILEMSG, (LPSTR)fileName, nFileNameMaxLen) != NULL) {
+				char fullPath[MSGSIZE];
+				strncpy(fullPath, fileName, MSGSIZE);
+				strncpy(fileinit_msg.buf, getFileName(fileName) , MSGSIZE); // 나 파일보낼게
+				DisplayText_Send("%s\r\n", fileinit_msg.buf);
+
+				send(g_sock, (char*)&fileinit_msg, BUFSIZE, 0);
+				
+				FILE_MSG sendfile = { FILEBYTE, }; // 파일 버퍼
+				strncpy(sendfile.client_id, fileinit_msg.client_id, ID_SIZE);
+
+				FILE* send_fp = fopen(fullPath, "rb");
+				if (send_fp == NULL) {
+					DisplayText_Send("%s 파일 전송 실패 입니다\r\n", fileName);
+					DisplayText_Recv("\r\n");
+					return TRUE;
+				}
+				while (!feof(send_fp)) {
+					fread(sendfile.buf, FILE_SIZE, 1, send_fp);
+					send(g_sock, (char*)&sendfile, BUFSIZE, 0);
+				}
+				fileinit_msg.type = FILEEND;
+				send(g_sock, (char*)&fileinit_msg, BUFSIZE, 0);
+				DisplayText_Send("%s 파일 전송 완료\r\n", fileName);
+				DisplayText_Recv("\r\n");
+			}
+			return TRUE;
+
+		case IDC_MSG: // 2-1) 사용자 메세지 EditControll 
 			if (HIWORD(wParam) == EN_SETFOCUS) { // EditControll 포커스 얻을 시에(칠 준비하면, 톡방 들어갈시?)
 				strncpy(kakaoTalk1.whenSent, getCurrentTime(), 23);
 				if (g_isUDP == false) {
@@ -352,7 +425,7 @@ BOOL CALLBACK DlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
 			}
 			return TRUE;
 
-		case IDC_DELBOARD:
+		case IDC_DELBOARD: // 2-2) 그림판 삭제
 			if (g_boardValid == TRUE) {
 				DestroyWindow(g_hDrawWnd);
 
@@ -362,7 +435,7 @@ BOOL CALLBACK DlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
 			}
 			return TRUE;
 
-		case IDC_ISIPV6: // <수정>
+		case IDC_ISIPV6: 
 			g_isIPv6 = SendMessage(hButtonIsIPv6, BM_GETCHECK, 0, 0);
 			g_isUDP = SendMessage(hUDPCheck, BM_GETCHECK, 0, 0);
 			if (g_isUDP == false) { // UDP안눌러져잇을때만
@@ -397,61 +470,45 @@ BOOL CALLBACK DlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
 
 			return TRUE;
 
-		case IDC_CONNECT:// <수정>
+		case IDC_CONNECT:
 			if (GetDlgItemText(hDlg, IDC_USERID, (LPSTR)g_chatmsg.client_id, ID_SIZE) != NULL) {
 				// UDP 일때 연결 X, TCP일 때 연결
 				g_isUDP = SendMessage(hUDPCheck, BM_GETCHECK, 0, 0);
 				// InitMSG에 사용자 이름 추가
 				GetDlgItemText(hDlg, IDC_USERID, (LPSTR)g_initmsg.client_id, ID_SIZE);
 				GetDlgItemText(hDlg, IDC_USERID, (LPSTR)kakaoTalk1.client_id, ID_SIZE);
+				GetDlgItemText(hDlg, IDC_USERID, (LPSTR)fileinit_msg.client_id, ID_SIZE);
 
 				g_isIPv6 = SendMessage(hButtonIsIPv6, BM_GETCHECK, 0, 0);
 				GetDlgItemText(hDlg, IDC_USERID, (LPSTR)g_chatmsg.client_id, ID_SIZE);
 				g_port = GetDlgItemInt(hDlg, IDC_PORT, NULL, FALSE);
 
-				if (g_isUDP == false) {
+				if (g_isUDP == false) { // TCP 연결
 					GetDlgItemText(hDlg, IDC_IPADDR, g_ipaddr, sizeof(g_ipaddr));
-
-					// 소켓 통신 스레드 시작
+					// 소켓 TCP 통신 스레드 시작
 					g_hClientThread = CreateThread(NULL, 0, ClientMain, NULL, 0, NULL);
-					if (g_hClientThread == NULL) {
-						MessageBox(hDlg, "TCP 클라이언트를 시작할 수 없습니다."
-							"\r\n프로그램을 종료합니다.", "실패!", MB_ICONERROR);
-						EndDialog(hDlg, 0);
-					}
-					else {
-						EnableWindow(hButtonConnect, FALSE);
-						while (g_bStart == FALSE); // 서버 접속 성공 기다림
-						EnableWindow(hButtonIsIPv6, FALSE);
-						EnableWindow(hEditIPaddr, FALSE);
-						EnableWindow(hEditPort, FALSE);
-						EnableWindow(hUDPCheck, FALSE);
-						EnableWindow(g_hButtonSendMsg, TRUE);
-						SetFocus(hEditMsg);
-					}
+					
 				}
-				else { // UDP 연결 <수정>
-
+				else { // UDP 연결
 					// 소켓 UDP통신 스레드 시작
 					g_hClientThread = CreateThread(NULL, 0, ClientMainUDP, NULL, 0, NULL);
-					if (g_hClientThread == NULL) {
-						MessageBox(hDlg, "UDP 클라이언트를 시작할 수 없습니다."
-							"\r\n프로그램을 종료합니다.", "실패!", MB_ICONERROR);
-						EndDialog(hDlg, 0);
-					}
-					else {
-						EnableWindow(hButtonConnect, FALSE);
-						while (g_bStart == FALSE); // 서버 접속 성공 기다림
-						EnableWindow(hButtonIsIPv6, FALSE);
-						EnableWindow(hEditIPaddr, FALSE);
-						EnableWindow(hEditPort, FALSE);
-						EnableWindow(g_hButtonSendMsg, TRUE);
-						EnableWindow(hUDPCheck, FALSE);
-						SetFocus(hEditMsg);
-					}
-
 				}
 
+				if (g_hClientThread == NULL) {
+					MessageBox(hDlg, "UDP 클라이언트를 시작할 수 없습니다."
+						"\r\n프로그램을 종료합니다.", "실패!", MB_ICONERROR);
+					EndDialog(hDlg, 0);
+				}
+				else {
+					EnableWindow(hButtonConnect, FALSE);
+					while (g_bStart == FALSE); // 서버 접속 성공 기다림
+					EnableWindow(hButtonIsIPv6, FALSE);
+					EnableWindow(hEditIPaddr, FALSE);
+					EnableWindow(hEditPort, FALSE);
+					EnableWindow(g_hButtonSendMsg, TRUE);
+					EnableWindow(hUDPCheck, FALSE);
+					SetFocus(hEditMsg);
+				}
 				return TRUE;
 			}
 
@@ -564,6 +621,7 @@ DWORD WINAPI ClientMain(LPVOID arg)
 		retval = connect(g_sock, (SOCKADDR*)&serveraddr, sizeof(serveraddr));
 		if (retval == SOCKET_ERROR) err_quit("connect()");
 	}
+
 	retval = send(g_sock, (char*)&g_initmsg, BUFSIZE, 0);
 	MessageBox(NULL, "서버에 TCP로 접속했습니다.", "성공!", MB_ICONINFORMATION);
 
@@ -604,6 +662,8 @@ DWORD WINAPI ReadThread(LPVOID arg)
 	COMM_MSG comm_msg;
 	CHAT_MSG* chat_msg;
 	DRAWLINE_MSG* draw_msg;
+	CHAT_MSG* fileinit_recv;
+	FILE_MSG* fileRecv;
 
 	while (1) {
 		retval = recvn(g_sock, (char*)&comm_msg, BUFSIZE, 0);
@@ -645,6 +705,25 @@ DWORD WINAPI ReadThread(LPVOID arg)
 			SendMessage(g_hDrawWnd, WM_DRAWIT,
 				MAKEWPARAM(draw_msg->x0, draw_msg->y0),
 				MAKELPARAM(draw_msg->x1, draw_msg->y1));
+		}
+		else if (comm_msg.type == FILEINIT) {
+			fileinit_recv = (CHAT_MSG*)&comm_msg;
+			if (strcmp(fileinit_recv->client_id, fileinit_msg.client_id) == 0)continue;
+			DisplayText_KAKAOTALKONE("%s 파일 수신\r\n", fileinit_recv->buf);
+			char fileN[280]; ZeroMemory(fileN, 280);
+			strncat(fileN, fileinit_recv->buf, MSGSIZE);
+			DisplayText_KAKAOTALKONE("%s 파일저장\r\n", fileN);
+			recvFile = fopen(fileN, "wb");
+		}
+		else if (comm_msg.type == FILEEND) {
+			fileinit_recv = (CHAT_MSG*)&comm_msg;
+			if (strcmp(fileinit_recv->client_id, fileinit_msg.client_id) == 0)continue;
+			fclose(recvFile);
+		}
+		else if (comm_msg.type == FILEBYTE && recvFile != NULL) {
+			fileRecv = (FILE_MSG*)&comm_msg;
+			if (strcmp(fileRecv->client_id, fileinit_msg.client_id) == 0)continue;
+			fwrite(fileRecv->buf, MSGSIZE, 1, recvFile);
 		}
 		else {
 			draw_msg = (DRAWLINE_MSG*)&comm_msg;
@@ -698,7 +777,7 @@ DWORD WINAPI WriteThread(LPVOID arg)
 	return 0;
 }
 
-// 수정 UDP Client 스레드
+// UDP Client 스레드
 DWORD WINAPI ClientMainUDP(LPVOID arg) {
 	int retvalUDP;
 	HANDLE hThread[2];
@@ -1144,13 +1223,12 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 
 		//직선,선
 		if (g_drawmsg.type == DRAWLINE || g_drawmsg.type == DRAWSTRA) {
-			// 화면에 그리기
+			
 			hOldPen = (HPEN)SelectObject(hDC, hPen);
 			MoveToEx(hDC, LOWORD(wParam), HIWORD(wParam), NULL);
 			LineTo(hDC, LOWORD(lParam), HIWORD(lParam));
 			SelectObject(hDC, hOldPen);
 
-			// 메모리 비트맵에 그리기
 			hOldPen = (HPEN)SelectObject(hDCMem, hPen);
 			MoveToEx(hDCMem, LOWORD(wParam), HIWORD(wParam), NULL);
 			LineTo(hDCMem, LOWORD(lParam), HIWORD(lParam));
@@ -1321,6 +1399,16 @@ int recvn(SOCKET s, char* buf, int len, int flags)
 	}
 
 	return (len - left);
+}
+
+char* getFileName(char* fullPath) {
+	char* ptr = strtok(fullPath, "\\");
+	char* onlyFileName;
+	while (ptr) {
+		onlyFileName = ptr;
+		ptr = strtok(NULL, "\\");
+	}
+	return onlyFileName;
 }
 
 // 소켓 함수 오류 출력 후 종료
