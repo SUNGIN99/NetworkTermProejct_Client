@@ -30,9 +30,8 @@
 #define MSGSIZE     (BUFSIZE-(sizeof(int)*2)-ID_SIZE-CHECK_WHO-TIME_SIZE)// 보내는 채팅 메세지 사이즈   
 #define ID_SIZE     20												 // 클라이언트 ID (문자열 길이)
 #define CHECK_WHO   1												 // 서버 보낸 식별 글
-#define TIME_SIZE   23												 // 보낸 시간 정보 길이\
-
-#define FILE_SIZE   BUFSIZE - 4 - ID_SIZE
+#define TIME_SIZE   23												 // 보낸 시간 정보 길이
+#define FILE_SIZE   BUFSIZE - 4 - ID_SIZE							 // 송/수신 받는 파일메세지 버퍼 크기
 
 // 3) 전송 메세지 타입
 // 3-1) 기본 메세지 전송 정보
@@ -49,9 +48,9 @@
 #define KICKOUT     3001				   // type: 서버에서 추방 메세지
 
 #define READCHECK  	4000				   // type: 읽음 알림 메세지
-#define FILEINIT	4001
-#define FILEBYTE    4002				   // type: 파일전송 메세지
-#define FILEEND		4003
+#define FILEINIT	4001				   // type: 파일을 보내겟다고 알릴때 사용
+#define FILEBYTE    4002				   // type: 파일내용 전송시 사용
+#define FILEEND		4003				   // type: 파일 Open 후에 파일데이터를 모두 보낸 후에 사용 (feof)
 /* <------------------------- [0]: 상수 Constant ------------------------> */
 
 // S-1) 서버로부터 받는 메세지 포인터
@@ -98,11 +97,15 @@ static SOCKET	     listen_sock_UDPv4;
 static SOCKET	     send_sock_UDPv4;
 static SOCKET	     listen_sock_UDPv6;
 static SOCKET	     send_sock_UDPv6; 
+// 접속을 원하는 서버 IP
+SOCKADDR_IN remoteaddr_v4;
+SOCKADDR_IN6 remoteaddr_v6;
+
 // 3) 소켓 주소 정보 (IP, Port, Family)
 static char          g_ipaddr[64];					// 서버 IP 주소
 static u_short       g_port;						// 서버 포트 번호
 static BOOL          g_isIPv6;						// IPv4 or IPv6 주소?
-static BOOL			g_isUDP; // 체크하면 UDP, 아니면 그냥 TCP
+static BOOL			 g_isUDP; // 체크하면 UDP, 아니면 그냥 TCP
 // 4) 스레드 핸들(소켓 통신용)
 static HANDLE        g_hClientThread; 
 static HANDLE        g_hReadEvent, g_hWriteEvent;	// 이벤트 핸들
@@ -115,12 +118,14 @@ static HWND          g_hButtonSendMsg;				// '메시지 전송' 버튼
 static HWND          g_hEditRecv;					// 받은 메시지 출력 (상대방)
 static HWND			 g_hEditSend;				// 보낸 메시지 출력 (내가 보냄)
 static HWND			 g_EditUserRead;				// (카카오톡 1) 읽음 알림메세지 출력
+static HWND			 g_EditFileRecv;
+
 static BOOL			 g_boardValid;					// 현재 그림판 활성화 상태
 
 // 6) 통신 메세지 정보
 static HWND			 hEditUserID;					// 사용자 ID
 static CHAT_MSG      g_chatmsg;						// 기본 채팅메세지 프로토콜 형태
-static DRAWLINE_MSG  g_drawmsg;						// 그림 정보 메세지 프로토콜 형태
+static DRAWLINE_MSG  g_drawlinemsg;						// 그림 정보 메세지 프로토콜 형태
 static int           g_drawcolor;					// 선 색상
 
 static int			 clientUniqueID;				// 클라이언트 식별 번호
@@ -128,18 +133,21 @@ static char			 strUniqueID[5] = { 0,0,0,0,0 };
 // 7) 추가 채팅 프로토콜
 static CHAT_MSG		g_initmsg;						// 최초 전송 메세지(메세지 내용없이 사용자 ID를 보냄)
 static CHAT_MSG		kakaoTalk1;						// 카카오톡 1 기능을 위한 메세지(g_chatmsg)에 Focus를 받으면 전송
+static CHAT_MSG		fileinit_msg;					// 파일 전송 시작/종료 알림 메세지(송신 식별 정보 및 파일 이름)
 /* <----------------- [1]: 전역변수 ------------------>*/
 
-OPENFILENAME OFN; // file
-const UINT nFileNameMaxLen = MSGSIZE;
-WCHAR szFileName[nFileNameMaxLen];
+/* <----------------- [1-F]: 전역변수(파일) ------------------>*/
+OPENFILENAME OFN; // Window 파일 변수
+const UINT nFileNameMaxLen = MSGSIZE;			// 보낼 파일 명 길이
+WCHAR szFileName[nFileNameMaxLen];				// 보낼 파일 명
+FILE_MSG			fileRecv;					// 받은 파일 데이터 조각 이진 버퍼
+FILE*				recvFile;					// 받을 파일 포인터
+/* <----------------- [1-F]: 전역변수(파일) ------------------>*/
 
-CHAT_MSG			fileinit_msg;// 파일송신자 식별 정보 및 파일 이름
-
-FILE_MSG			fileRecv; // 받은 파일 이진 버퍼
-FILE*				recvFile; // 받을 파일
 
 /* <----------------- [2]: 사용자 정의 함수 ------------------>*/
+// 0) TCP/UDP, IPv4/6 프로토콜에 따른 일괄 전송함수
+int SendByProtocol(char* msg);
 // 1) TCP 소켓 통신 스레드
 DWORD WINAPI ClientMain(LPVOID arg);
 DWORD WINAPI ReadThread(LPVOID arg);
@@ -153,25 +161,25 @@ DWORD WINAPI ReadThread_UDP(LPVOID);
 DWORD WINAPI ClientMainUDP(LPVOID);
 DWORD WINAPI WriteThread_UDPv6(LPVOID);
 DWORD WINAPI ReadThread_UDPv6(LPVOID);
-// 3) 접속을 원하는 서버 IP
-SOCKADDR_IN remoteaddr_v4;
-SOCKADDR_IN6 remoteaddr_v6;
 
-// 4) WINAPI 프로시저 (CALLBACK 함수)
+// 3) WINAPI 프로시저 (CALLBACK 함수)
 BOOL CALLBACK DlgProc(HWND, UINT, WPARAM, LPARAM);		// 대화상자 프로시저
 LRESULT CALLBACK WndProc(HWND, UINT, WPARAM, LPARAM);	// 자식 윈도우 프로시저
 
-// 5) EditControll 출력 함수
+// 4) EditControll 출력 함수
 void DisplayText_Recv(char* fmt, ...);  // 수신 EditControll 출력 메세지
 void DisplayText_Send(char* fmt, ...);  // 송신 EditControll 출력 메세지
 void DisplayText_KAKAOTALKONE(char* fmt, ...); // 읽음 알림 EditControll 출력 메세지
+void DisplayText_FILESTATUS(char* fmt, ...); // 파일 status
 char* DatetoString(char* fmt, ...);  // 날짜 form 반환 함수
 char* getCurrentTime();				 // 날짜 반환 함수
-// 6) 오류 출력 함수
+// 5) 오류 출력 함수
 void err_quit(char* msg);
 void err_display(char* msg);
 
+// 6) 파일 전송 관련 함수
 char* getFileName(char* fullPath);
+int SendFile(char* fileName);
 /* <----------------- [2]: 사용자 정의 함수 ------------------>*/
 
 
@@ -192,9 +200,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 
 	// 3) 전송 메세지 전역변수 최초 초기화
 	g_chatmsg.type = CHATTING;  // 채팅 메세지 타입 = CHATTING (2000)
-	g_drawmsg.type = DRAWLINE;  // 그림 메세지 타입 = DRAWLINE (2001)
-	g_drawmsg.color = RGB(0, 0, 0);
-	g_drawmsg.width = 5;
+	g_drawlinemsg.type = DRAWLINE;  // 그림 메세지 타입 = DRAWLINE (2001)
+	g_drawlinemsg.color = RGB(0, 0, 0);
+	g_drawlinemsg.width = 5;
 
 	// 4) 서버 접속 성공시 최초 전송 메세지(사용자 식별정보)
 	g_initmsg.type = ACCESS;    // 접속 메세지 타입 = ACCESS (3000)
@@ -206,7 +214,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 	// 추가) 파일 전송
 	fileinit_msg.type = FILEINIT;
 
-	g_chatmsg.whoSent = g_drawmsg.whoSent = g_initmsg.whoSent = kakaoTalk1.whoSent = fileinit_msg.whoSent = clientUniqueID;
+	g_chatmsg.whoSent = g_drawlinemsg.whoSent 
+		= g_initmsg.whoSent = kakaoTalk1.whoSent 
+		= fileinit_msg.whoSent = clientUniqueID;
 
 	// 5) 대화상자 인스턴스 생성
 	g_hInst = hInstance;
@@ -225,15 +235,14 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 BOOL CALLBACK DlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
 	// 1) 서버 통신 관련 Window
-	static HWND hUDPCheck;			// UDP로 접속여부 CheckBox
 	static HWND hButtonIsIPv6;		// IPv6 패밀리 선택
+	static HWND	hUDPCheck;			// UDP로 접속여부 CheckBox
 	static HWND hEditIPaddr;		// IP주소 입력 EditControll
 	static HWND hEditPort;			// Port번호 입력 EditControll
 	static HWND hButtonConnect;		// 연결 버튼
 	static HWND hEditMsg;			// 전송할 메세지 EditControll
-
 	static HWND hUserUniqueID;		// 유저 고유 번호
-	static HWND hFileName;
+	static HWND hFileName;			
 
 	// 2) 그림판 관련 Window
 	static HWND hColorRed;			// 선 색 빨간색 RadioBtn
@@ -267,7 +276,8 @@ BOOL CALLBACK DlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
 		// A-2) 메세지 관련 Window(송/수신, 읽기알림 메세지 출력부)
 		g_hEditRecv = GetDlgItem(hDlg, IDC_STATUS);
 		g_hEditSend = GetDlgItem(hDlg, IDC_STATUS2);
-		g_EditUserRead = (GetDlgItem(hDlg, IDC_ONE));
+		g_EditUserRead = GetDlgItem(hDlg, IDC_ONE);
+		g_EditFileRecv = GetDlgItem(hDlg, IDC_FILERECV);
 
 		// A-3) 그림판 기능 Window
 		hColorRed = GetDlgItem(hDlg, IDC_COLORRED);
@@ -327,7 +337,7 @@ BOOL CALLBACK DlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
 
 	// D) 윈도우 컨트롤 핸들 처리 부
 	case WM_HSCROLL: // 1. 굵기 조절 스크롤
-		g_drawmsg.width = SendDlgItemMessage(hDlg, IDC_THICK, TBM_GETPOS, 0, 0);
+		g_drawlinemsg.width = SendDlgItemMessage(hDlg, IDC_THICK, TBM_GETPOS, 0, 0);
 		return 0;
 
 	case WM_COMMAND: // 2. Window 발생 이벤트 처리 
@@ -349,50 +359,15 @@ BOOL CALLBACK DlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
 		case IDC_SENDFILE:
 			char fileName[nFileNameMaxLen];
 			ZeroMemory(fileName, nFileNameMaxLen);
-			if (GetDlgItemText(hDlg, IDC_FILEMSG, (LPSTR)fileName, nFileNameMaxLen) != NULL) {
-				char fullPath[MSGSIZE];
-				strncpy(fullPath, fileName, MSGSIZE);
-				strncpy(fileinit_msg.buf, getFileName(fileName) , MSGSIZE); // 나 파일보낼게
-				DisplayText_Send("%s\r\n", fileinit_msg.buf);
-
-				send(g_sock, (char*)&fileinit_msg, BUFSIZE, 0);
-				
-				FILE_MSG sendfile = { FILEBYTE, }; // 파일 버퍼
-				strncpy(sendfile.client_id, fileinit_msg.client_id, ID_SIZE);
-
-				FILE* send_fp = fopen(fullPath, "rb");
-				if (send_fp == NULL) {
-					DisplayText_Send("%s 파일 전송 실패 입니다\r\n", fileName);
-					DisplayText_Recv("\r\n");
-					return TRUE;
-				}
-				while (!feof(send_fp)) {
-					fread(sendfile.buf, FILE_SIZE, 1, send_fp);
-					send(g_sock, (char*)&sendfile, BUFSIZE, 0);
-				}
-				fileinit_msg.type = FILEEND;
-				send(g_sock, (char*)&fileinit_msg, BUFSIZE, 0);
-				DisplayText_Send("%s 파일 전송 완료\r\n", fileName);
-				DisplayText_Recv("\r\n");
-			}
+			if (GetDlgItemText(hDlg, IDC_FILEMSG, (LPSTR)fileName, nFileNameMaxLen) != NULL) 
+				return SendFile(fileName);
+			
 			return TRUE;
 
 		case IDC_MSG: // 2-1) 사용자 메세지 EditControll 
 			if (HIWORD(wParam) == EN_SETFOCUS) { // EditControll 포커스 얻을 시에(칠 준비하면, 톡방 들어갈시?)
 				strncpy(kakaoTalk1.whenSent, getCurrentTime(), 23);
-				if (g_isUDP == false) {
-					send(g_sock, (char*)&kakaoTalk1, BUFSIZE, 0);
-				}
-				else {
-					if (g_isIPv6 == false) {
-						sendto(send_sock_UDPv4, (char*)&kakaoTalk1, BUFSIZE, 0
-							, (SOCKADDR*)&remoteaddr_v4, sizeof(remoteaddr_v4));
-					}
-					else {
-						sendto(send_sock_UDPv6, (char*)&kakaoTalk1, BUFSIZE, 0
-							, (SOCKADDR*)&remoteaddr_v6, sizeof(remoteaddr_v6));
-					}
-				}
+				return SendByProtocol((char*)&kakaoTalk1);
 			}
 			return TRUE;
 
@@ -527,23 +502,23 @@ BOOL CALLBACK DlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
 
 			// 색깔
 		case IDC_COLORRED:
-			g_drawmsg.color = RGB(255, 0, 0);
+			g_drawlinemsg.color = RGB(255, 0, 0);
 			return TRUE;
 
 		case IDC_COLORGREEN:
-			g_drawmsg.color = RGB(0, 255, 0);
+			g_drawlinemsg.color = RGB(0, 255, 0);
 			return TRUE;
 
 		case IDC_COLORBLUE:
-			g_drawmsg.color = RGB(0, 0, 255);
+			g_drawlinemsg.color = RGB(0, 0, 255);
 			return TRUE;
 
 		case IDC_COLORBLACK:
-			g_drawmsg.color = RGB(0, 0, 0);
+			g_drawlinemsg.color = RGB(0, 0, 0);
 			return TRUE;
 
 		case IDC_COLORPINK:
-			g_drawmsg.color = RGB(254, 211, 255);
+			g_drawlinemsg.color = RGB(254, 211, 255);
 			return TRUE;
 
 		case IDCANCEL:
@@ -557,27 +532,27 @@ BOOL CALLBACK DlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
 
 			//도형
 		case IDC_LINE:
-			g_drawmsg.type = DRAWLINE;
+			g_drawlinemsg.type = DRAWLINE;
 			return TRUE;
 
 		case IDC_STRA:
-			g_drawmsg.type = DRAWSTRA;
+			g_drawlinemsg.type = DRAWSTRA;
 			return TRUE;
 
 		case IDC_TRIA:
-			g_drawmsg.type = DRAWTRIA;
+			g_drawlinemsg.type = DRAWTRIA;
 			return TRUE;
 
 		case IDC_RECT:
-			g_drawmsg.type = DRAWRECT;
+			g_drawlinemsg.type = DRAWRECT;
 			return TRUE;
 
 		case IDC_CIRC:
-			g_drawmsg.type = DRAWCIRC;
+			g_drawlinemsg.type = DRAWCIRC;
 			return TRUE;
 
 		case IDC_ERAS:
-			g_drawmsg.type = DRAWERAS;
+			g_drawlinemsg.type = DRAWERAS;
 			return TRUE;
 		}
 
@@ -664,6 +639,7 @@ DWORD WINAPI ReadThread(LPVOID arg)
 	DRAWLINE_MSG* draw_msg;
 	CHAT_MSG* fileinit_recv;
 	FILE_MSG* fileRecv;
+	char fileN[280]; 
 
 	while (1) {
 		retval = recvn(g_sock, (char*)&comm_msg, BUFSIZE, 0);
@@ -695,29 +671,32 @@ DWORD WINAPI ReadThread(LPVOID arg)
 		else if (comm_msg.type == DRAWERAS) {
 			draw_msg = (DRAWLINE_MSG*)&comm_msg;
 			g_drawcolor = RGB(255, 255, 255);
-			g_drawmsg.type = draw_msg->type;
-			g_drawmsg.x0 = draw_msg->x0;
-			g_drawmsg.y0 = draw_msg->y0;
-			g_drawmsg.x1 = draw_msg->x1;
-			g_drawmsg.y1 = draw_msg->y1;
+			g_drawlinemsg.type = draw_msg->type;
+			g_drawlinemsg.x0 = draw_msg->x0;
+			g_drawlinemsg.y0 = draw_msg->y0;
+			g_drawlinemsg.x1 = draw_msg->x1;
+			g_drawlinemsg.y1 = draw_msg->y1;
 
-			g_drawmsg.width = draw_msg->width;
+			g_drawlinemsg.width = draw_msg->width;
 			SendMessage(g_hDrawWnd, WM_DRAWIT,
 				MAKEWPARAM(draw_msg->x0, draw_msg->y0),
 				MAKELPARAM(draw_msg->x1, draw_msg->y1));
 		}
 		else if (comm_msg.type == FILEINIT) {
 			fileinit_recv = (CHAT_MSG*)&comm_msg;
+			ZeroMemory(fileN, 280);
 			if (strcmp(fileinit_recv->client_id, fileinit_msg.client_id) == 0)continue;
-			DisplayText_KAKAOTALKONE("%s 파일 수신\r\n", fileinit_recv->buf);
-			char fileN[280]; ZeroMemory(fileN, 280);
-			strncat(fileN, fileinit_recv->buf, MSGSIZE);
-			DisplayText_KAKAOTALKONE("%s 파일저장\r\n", fileN);
+
+			DisplayText_FILESTATUS("\"%s\" 파일 수신 from %s(%d)\r\n", fileinit_recv->buf, fileinit_recv->client_id, fileinit_recv->whoSent);
+			strncpy(fileN, "프로젝트 받은 파일\\", 280);
+			strncat(fileN, fileinit_recv->buf, strlen(fileinit_recv->buf));
 			recvFile = fopen(fileN, "wb");
 		}
 		else if (comm_msg.type == FILEEND) {
 			fileinit_recv = (CHAT_MSG*)&comm_msg;
 			if (strcmp(fileinit_recv->client_id, fileinit_msg.client_id) == 0)continue;
+
+			DisplayText_FILESTATUS("%s가 보낸 \"%s 파일 저장\"\r\n", fileinit_recv->client_id, fileN);
 			fclose(recvFile);
 		}
 		else if (comm_msg.type == FILEBYTE && recvFile != NULL) {
@@ -728,13 +707,13 @@ DWORD WINAPI ReadThread(LPVOID arg)
 		else {
 			draw_msg = (DRAWLINE_MSG*)&comm_msg;
 			g_drawcolor = draw_msg->color;
-			g_drawmsg.type = draw_msg->type;
-			g_drawmsg.x0 = draw_msg->x0;
-			g_drawmsg.y0 = draw_msg->y0;
-			g_drawmsg.x1 = draw_msg->x1;
-			g_drawmsg.y1 = draw_msg->y1;
+			g_drawlinemsg.type = draw_msg->type;
+			g_drawlinemsg.x0 = draw_msg->x0;
+			g_drawlinemsg.y0 = draw_msg->y0;
+			g_drawlinemsg.x1 = draw_msg->x1;
+			g_drawlinemsg.y1 = draw_msg->y1;
 
-			g_drawmsg.width = draw_msg->width;
+			g_drawlinemsg.width = draw_msg->width;
 			SendMessage(g_hDrawWnd, WM_DRAWIT,
 				MAKEWPARAM(draw_msg->x0, draw_msg->y0),
 				MAKELPARAM(draw_msg->x1, draw_msg->y1));
@@ -867,6 +846,9 @@ DWORD WINAPI ReadThread_UDP(LPVOID arg) {
 	COMM_MSG comm_msg;
 	CHAT_MSG* chat_msg;
 	DRAWLINE_MSG* draw_msg;
+	CHAT_MSG* fileinit_recv;
+	FILE_MSG* fileRecv;
+	char fileN[280];
 
 	while (1) {
 		addrlen = sizeof(peeraddr);
@@ -899,27 +881,49 @@ DWORD WINAPI ReadThread_UDP(LPVOID arg) {
 		else if (comm_msg.type == DRAWERAS) {
 			draw_msg = (DRAWLINE_MSG*)&comm_msg;
 			g_drawcolor = RGB(255, 255, 255);
-			g_drawmsg.type = draw_msg->type;
-			g_drawmsg.x0 = draw_msg->x0;
-			g_drawmsg.y0 = draw_msg->y0;
-			g_drawmsg.x1 = draw_msg->x1;
-			g_drawmsg.y1 = draw_msg->y1;
+			g_drawlinemsg.type = draw_msg->type;
+			g_drawlinemsg.x0 = draw_msg->x0;
+			g_drawlinemsg.y0 = draw_msg->y0;
+			g_drawlinemsg.x1 = draw_msg->x1;
+			g_drawlinemsg.y1 = draw_msg->y1;
 
-			g_drawmsg.width = draw_msg->width;
+			g_drawlinemsg.width = draw_msg->width;
 			SendMessage(g_hDrawWnd, WM_DRAWIT,
 				MAKEWPARAM(draw_msg->x0, draw_msg->y0),
 				MAKELPARAM(draw_msg->x1, draw_msg->y1));
 		}
+		else if (comm_msg.type == FILEINIT) {
+			fileinit_recv = (CHAT_MSG*)&comm_msg;
+			ZeroMemory(fileN, 280);
+			if (strcmp(fileinit_recv->client_id, fileinit_msg.client_id) == 0)continue;
+
+			DisplayText_FILESTATUS("\"%s\" 파일 수신 from %s(%d)\r\n", fileinit_recv->buf, fileinit_recv->client_id, fileinit_recv->whoSent);
+			strncpy(fileN, "프로젝트 받은 파일\\", 280);
+			strncat(fileN, fileinit_recv->buf, strlen(fileinit_recv->buf));
+			recvFile = fopen(fileN, "wb");
+		}
+		else if (comm_msg.type == FILEEND) {
+			fileinit_recv = (CHAT_MSG*)&comm_msg;
+			if (strcmp(fileinit_recv->client_id, fileinit_msg.client_id) == 0)continue;
+
+			DisplayText_FILESTATUS("%s가 보낸 \"%s 파일 저장\"\r\n", fileinit_recv->client_id, fileN);
+			fclose(recvFile);
+		}
+		else if (comm_msg.type == FILEBYTE && recvFile != NULL) {
+			fileRecv = (FILE_MSG*)&comm_msg;
+			if (strcmp(fileRecv->client_id, fileinit_msg.client_id) == 0)continue;
+			fwrite(fileRecv->buf, MSGSIZE, 1, recvFile);
+		}
 		else {
 			draw_msg = (DRAWLINE_MSG*)&comm_msg;
 			g_drawcolor = draw_msg->color;
-			g_drawmsg.type = draw_msg->type;
-			g_drawmsg.x0 = draw_msg->x0;
-			g_drawmsg.y0 = draw_msg->y0;
-			g_drawmsg.x1 = draw_msg->x1;
-			g_drawmsg.y1 = draw_msg->y1;
+			g_drawlinemsg.type = draw_msg->type;
+			g_drawlinemsg.x0 = draw_msg->x0;
+			g_drawlinemsg.y0 = draw_msg->y0;
+			g_drawlinemsg.x1 = draw_msg->x1;
+			g_drawlinemsg.y1 = draw_msg->y1;
 
-			g_drawmsg.width = draw_msg->width;
+			g_drawlinemsg.width = draw_msg->width;
 			SendMessage(g_hDrawWnd, WM_DRAWIT,
 				MAKEWPARAM(draw_msg->x0, draw_msg->y0),
 				MAKELPARAM(draw_msg->x1, draw_msg->y1));
@@ -937,12 +941,13 @@ DWORD WINAPI ReadThread_UDP(LPVOID arg) {
 DWORD WINAPI WriteThread_UDP(LPVOID arg) {
 	int retvalUDP;
 
-	//int ttl_v4 = 2; // 문제
-	//retvalUDP = setsockopt(send_sock_UDPv4, IPPROTO_IP, IP_MULTICAST_TTL,
-	//	(char*)ttl_v4, sizeof(ttl_v4));
-	//if (retvalUDP == SOCKET_ERROR) {
-	//	err_quit("setsockopt()");
-	//}
+	Sleep(1000);
+	DWORD ttl_v4 = 2; // 문제
+	retvalUDP = setsockopt(send_sock_UDPv4, IPPROTO_IP, IP_MULTICAST_TTL,
+		(char*)&ttl_v4, sizeof(ttl_v4));
+	if (retvalUDP == SOCKET_ERROR) {
+		err_quit("setsockopt()");
+	}
 
 	ZeroMemory(&remoteaddr_v4, sizeof(remoteaddr_v4));
 	remoteaddr_v4.sin_family = AF_INET;
@@ -1016,6 +1021,9 @@ DWORD WINAPI ReadThread_UDPv6(LPVOID arg) {
 	COMM_MSG comm_msg;
 	CHAT_MSG* chat_msg;
 	DRAWLINE_MSG* draw_msg;
+	CHAT_MSG* fileinit_recv;
+	FILE_MSG* fileRecv;
+	char fileN[280];
 
 	while (1) {
 		addrlen = sizeof(peeraddr);
@@ -1048,27 +1056,49 @@ DWORD WINAPI ReadThread_UDPv6(LPVOID arg) {
 		else if (comm_msg.type == DRAWERAS) {
 			draw_msg = (DRAWLINE_MSG*)&comm_msg;
 			g_drawcolor = RGB(255, 255, 255);
-			g_drawmsg.type = draw_msg->type;
-			g_drawmsg.x0 = draw_msg->x0;
-			g_drawmsg.y0 = draw_msg->y0;
-			g_drawmsg.x1 = draw_msg->x1;
-			g_drawmsg.y1 = draw_msg->y1;
+			g_drawlinemsg.type = draw_msg->type;
+			g_drawlinemsg.x0 = draw_msg->x0;
+			g_drawlinemsg.y0 = draw_msg->y0;
+			g_drawlinemsg.x1 = draw_msg->x1;
+			g_drawlinemsg.y1 = draw_msg->y1;
 
-			g_drawmsg.width = draw_msg->width;
+			g_drawlinemsg.width = draw_msg->width;
 			SendMessage(g_hDrawWnd, WM_DRAWIT,
 				MAKEWPARAM(draw_msg->x0, draw_msg->y0),
 				MAKELPARAM(draw_msg->x1, draw_msg->y1));
 		}
+		else if (comm_msg.type == FILEINIT) {
+			fileinit_recv = (CHAT_MSG*)&comm_msg;
+			ZeroMemory(fileN, 280);
+			if (strcmp(fileinit_recv->client_id, fileinit_msg.client_id) == 0)continue;
+
+			DisplayText_FILESTATUS("\"%s\" 파일 수신 from %s(%d)\r\n", fileinit_recv->buf, fileinit_recv->client_id, fileinit_recv->whoSent);
+			strncpy(fileN, "프로젝트 받은 파일\\", 280);
+			strncat(fileN, fileinit_recv->buf, strlen(fileinit_recv->buf));
+			recvFile = fopen(fileN, "wb");
+		}
+		else if (comm_msg.type == FILEEND) {
+			fileinit_recv = (CHAT_MSG*)&comm_msg;
+			if (strcmp(fileinit_recv->client_id, fileinit_msg.client_id) == 0)continue;
+
+			DisplayText_FILESTATUS("%s가 보낸 \"%s 파일 저장\"\r\n", fileinit_recv->client_id, fileN);
+			fclose(recvFile);
+		}
+		else if (comm_msg.type == FILEBYTE && recvFile != NULL) {
+			fileRecv = (FILE_MSG*)&comm_msg;
+			if (strcmp(fileRecv->client_id, fileinit_msg.client_id) == 0)continue;
+			fwrite(fileRecv->buf, MSGSIZE, 1, recvFile);
+		}
 		else {
 			draw_msg = (DRAWLINE_MSG*)&comm_msg;
 			g_drawcolor = draw_msg->color;
-			g_drawmsg.type = draw_msg->type;
-			g_drawmsg.x0 = draw_msg->x0;
-			g_drawmsg.y0 = draw_msg->y0;
-			g_drawmsg.x1 = draw_msg->x1;
-			g_drawmsg.y1 = draw_msg->y1;
+			g_drawlinemsg.type = draw_msg->type;
+			g_drawlinemsg.x0 = draw_msg->x0;
+			g_drawlinemsg.y0 = draw_msg->y0;
+			g_drawlinemsg.x1 = draw_msg->x1;
+			g_drawlinemsg.y1 = draw_msg->y1;
 
-			g_drawmsg.width = draw_msg->width;
+			g_drawlinemsg.width = draw_msg->width;
 			SendMessage(g_hDrawWnd, WM_DRAWIT,
 				MAKEWPARAM(draw_msg->x0, draw_msg->y0),
 				MAKELPARAM(draw_msg->x1, draw_msg->y1));
@@ -1086,12 +1116,13 @@ DWORD WINAPI ReadThread_UDPv6(LPVOID arg) {
 DWORD WINAPI WriteThread_UDPv6(LPVOID arg) {
 	int retvalUDP;
 
-	//int ttl_v4 = 2; // 문제
-	//retvalUDP = setsockopt(send_sock_UDPv4, IPPROTO_IP, IP_MULTICAST_TTL,
-	//	(char*)ttl_v4, sizeof(ttl_v4));
-	//if (retvalUDP == SOCKET_ERROR) {
-	//	err_quit("setsockopt()");
-	//}
+	Sleep(1000);
+	DWORD ttl_v6 = 2; // 문제
+	retvalUDP = setsockopt(send_sock_UDPv6, IPPROTO_IPV6, IPV6_MULTICAST_HOPS,
+		(char*)&ttl_v6, sizeof(ttl_v6));
+	if (retvalUDP == SOCKET_ERROR) {
+		err_quit("setsockopt()");
+	}
 
 	
 	ZeroMemory(&remoteaddr_v6, sizeof(remoteaddr_v6));
@@ -1170,24 +1201,24 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 		bDrawing = TRUE;
 		return 0;
 	case WM_MOUSEMOVE:
-		if (bDrawing && g_bStart && (g_drawmsg.type == DRAWLINE || g_drawmsg.type == DRAWERAS)) {
+		if (bDrawing && g_bStart && (g_drawlinemsg.type == DRAWLINE || g_drawlinemsg.type == DRAWERAS)) {
 			x1 = LOWORD(lParam);
 			y1 = HIWORD(lParam);
 
 			// 선 그리기 메시지 보내기
-			g_drawmsg.x0 = x0;
-			g_drawmsg.y0 = y0;
-			g_drawmsg.x1 = x1;
-			g_drawmsg.y1 = y1;
+			g_drawlinemsg.x0 = x0;
+			g_drawlinemsg.y0 = y0;
+			g_drawlinemsg.x1 = x1;
+			g_drawlinemsg.y1 = y1;
 
 			if(g_isUDP == FALSE)
-				send(g_sock, (char*)&g_drawmsg, BUFSIZE, 0);
+				send(g_sock, (char*)&g_drawlinemsg, BUFSIZE, 0);
 			else {
 				if (g_isIPv6 == TRUE)
-					sendto(send_sock_UDPv6, (char*)&g_drawmsg, BUFSIZE, 0,
+					sendto(send_sock_UDPv6, (char*)&g_drawlinemsg, BUFSIZE, 0,
 						(SOCKADDR*)&remoteaddr_v6, sizeof(remoteaddr_v6));
 				else
-					sendto(send_sock_UDPv4, (char*)&g_drawmsg, BUFSIZE, 0,
+					sendto(send_sock_UDPv4, (char*)&g_drawlinemsg, BUFSIZE, 0,
 						(SOCKADDR*)&remoteaddr_v4, sizeof(remoteaddr_v4)); 
 			}
 			x0 = x1;
@@ -1195,23 +1226,23 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 		}
 		return 0;
 	case WM_LBUTTONUP:
-		if (bDrawing && g_bStart && g_drawmsg.type != DRAWLINE && g_drawmsg.type != DRAWERAS) {
+		if (bDrawing && g_bStart && g_drawlinemsg.type != DRAWLINE && g_drawlinemsg.type != DRAWERAS) {
 			x1 = LOWORD(lParam);
 			y1 = HIWORD(lParam);
 
-			g_drawmsg.x0 = x0;
-			g_drawmsg.y0 = y0;
-			g_drawmsg.x1 = x1;
-			g_drawmsg.y1 = y1;
+			g_drawlinemsg.x0 = x0;
+			g_drawlinemsg.y0 = y0;
+			g_drawlinemsg.x1 = x1;
+			g_drawlinemsg.y1 = y1;
 
 			if (g_isUDP == FALSE)
-				send(g_sock, (char*)&g_drawmsg, BUFSIZE, 0);
+				send(g_sock, (char*)&g_drawlinemsg, BUFSIZE, 0);
 			else {
 				if (g_isIPv6 == TRUE)
-					sendto(send_sock_UDPv6, (char*)&g_drawmsg, BUFSIZE, 0,
+					sendto(send_sock_UDPv6, (char*)&g_drawlinemsg, BUFSIZE, 0,
 						(SOCKADDR*)&remoteaddr_v6, sizeof(remoteaddr_v6));
 				else
-					sendto(send_sock_UDPv4, (char*)&g_drawmsg, BUFSIZE, 0,
+					sendto(send_sock_UDPv4, (char*)&g_drawlinemsg, BUFSIZE, 0,
 						(SOCKADDR*)&remoteaddr_v4, sizeof(remoteaddr_v4));
 			}
 		}
@@ -1219,10 +1250,10 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 		return 0;
 	case WM_DRAWIT:
 		hDC = GetDC(hWnd);
-		hPen = CreatePen(PS_SOLID, g_drawmsg.width, g_drawcolor);
+		hPen = CreatePen(PS_SOLID, g_drawlinemsg.width, g_drawcolor);
 
 		//직선,선
-		if (g_drawmsg.type == DRAWLINE || g_drawmsg.type == DRAWSTRA) {
+		if (g_drawlinemsg.type == DRAWLINE || g_drawlinemsg.type == DRAWSTRA) {
 			
 			hOldPen = (HPEN)SelectObject(hDC, hPen);
 			MoveToEx(hDC, LOWORD(wParam), HIWORD(wParam), NULL);
@@ -1239,42 +1270,42 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 		}
 
 		//삼각형
-		else if (g_drawmsg.type == DRAWTRIA) {
+		else if (g_drawlinemsg.type == DRAWTRIA) {
 			hOldPen = (HPEN)SelectObject(hDC, hPen);
 			SelectObject(hDC, GetStockObject(NULL_BRUSH));
-			MoveToEx(hDC, g_drawmsg.x0, g_drawmsg.y0, NULL);
-			LineTo(hDC, (g_drawmsg.x1 - g_drawmsg.x0) / 2 + g_drawmsg.x0, g_drawmsg.y1);
-			LineTo(hDC, g_drawmsg.x1, g_drawmsg.y0);
-			LineTo(hDC, g_drawmsg.x0, g_drawmsg.y0);
+			MoveToEx(hDC, g_drawlinemsg.x0, g_drawlinemsg.y0, NULL);
+			LineTo(hDC, (g_drawlinemsg.x1 - g_drawlinemsg.x0) / 2 + g_drawlinemsg.x0, g_drawlinemsg.y1);
+			LineTo(hDC, g_drawlinemsg.x1, g_drawlinemsg.y0);
+			LineTo(hDC, g_drawlinemsg.x0, g_drawlinemsg.y0);
 			SelectObject(hDC, hOldPen);
 			DeleteObject(hPen);
 			ReleaseDC(hWnd, hDC);
 		}
 
 		//사각형
-		else if (g_drawmsg.type == DRAWRECT) {
+		else if (g_drawlinemsg.type == DRAWRECT) {
 			hOldPen = (HPEN)SelectObject(hDC, hPen);
 			SelectObject(hDC, GetStockObject(NULL_BRUSH));
-			MoveToEx(hDC, g_drawmsg.x0, g_drawmsg.y0, NULL);
-			LineTo(hDC, g_drawmsg.x0, g_drawmsg.y1);
-			LineTo(hDC, g_drawmsg.x1, g_drawmsg.y1);
-			LineTo(hDC, g_drawmsg.x1, g_drawmsg.y0);
-			LineTo(hDC, g_drawmsg.x0, g_drawmsg.y0);
+			MoveToEx(hDC, g_drawlinemsg.x0, g_drawlinemsg.y0, NULL);
+			LineTo(hDC, g_drawlinemsg.x0, g_drawlinemsg.y1);
+			LineTo(hDC, g_drawlinemsg.x1, g_drawlinemsg.y1);
+			LineTo(hDC, g_drawlinemsg.x1, g_drawlinemsg.y0);
+			LineTo(hDC, g_drawlinemsg.x0, g_drawlinemsg.y0);
 			SelectObject(hDC, hOldPen);
 			DeleteObject(hPen);
 			ReleaseDC(hWnd, hDC);
 		}
 
 		//원
-		else if (g_drawmsg.type == DRAWCIRC) {
+		else if (g_drawlinemsg.type == DRAWCIRC) {
 			hOldPen = (HPEN)SelectObject(hDC, hPen);
 			SelectObject(hDC, GetStockObject(NULL_BRUSH));
-			Ellipse(hDC, g_drawmsg.x0, g_drawmsg.y0, LOWORD(lParam), HIWORD(lParam));
+			Ellipse(hDC, g_drawlinemsg.x0, g_drawlinemsg.y0, LOWORD(lParam), HIWORD(lParam));
 			SelectObject(hDC, hOldPen);
 			DeleteObject(hPen);
 			ReleaseDC(hWnd, hDC);
 		}
-		else if (g_drawmsg.type == DRAWERAS) {
+		else if (g_drawlinemsg.type == DRAWERAS) {
 			hOldPen = (HPEN)SelectObject(hDC, hPen);
 			MoveToEx(hDC, LOWORD(wParam), HIWORD(wParam), NULL);
 			LineTo(hDC, LOWORD(lParam), HIWORD(lParam));
@@ -1380,6 +1411,21 @@ void DisplayText_KAKAOTALKONE(char* fmt, ...)
 	va_end(arg);
 }
 
+void DisplayText_FILESTATUS(char* fmt, ...)
+{
+	va_list arg;
+	va_start(arg, fmt);
+
+	char cbuf[1024];
+	vsprintf(cbuf, fmt, arg);
+
+	int nLength = GetWindowTextLength(g_EditFileRecv);
+	SendMessage(g_EditFileRecv, EM_SETSEL, nLength, nLength);
+	SendMessage(g_EditFileRecv, EM_REPLACESEL, FALSE, (LPARAM)cbuf);
+
+	va_end(arg);
+}
+
 // 사용자 정의 데이터 수신 함수
 int recvn(SOCKET s, char* buf, int len, int flags)
 {
@@ -1409,6 +1455,64 @@ char* getFileName(char* fullPath) {
 		ptr = strtok(NULL, "\\");
 	}
 	return onlyFileName;
+}
+
+int SendFile(char *fileName) {
+	// 1- 파일 보낼 것 이라고 먼저 알리기
+	fileinit_msg.type = FILEINIT;
+	char fullPath[MSGSIZE];
+	strncpy(fullPath, fileName, MSGSIZE);
+	strncpy(fileinit_msg.buf, getFileName(fileName), MSGSIZE); 
+
+	SendByProtocol((char*)&fileinit_msg);
+
+	// 2- 파일 읽고 보내기
+	FILE_MSG sendfile = { FILEBYTE, }; // 파일 버퍼
+	strncpy(sendfile.client_id, fileinit_msg.client_id, ID_SIZE);
+
+	DisplayText_Send("%s파일 전송 시작\r\n", fileinit_msg.buf);
+	DisplayText_Recv("\r\n");
+	FILE* send_fp = fopen(fullPath, "rb");
+	if (send_fp == NULL) {
+		DisplayText_Send("%s 파일 전송 실패 입니다\r\n", fileName);
+		DisplayText_Recv("\r\n");
+		return FALSE;
+	}
+	while (!feof(send_fp)) {
+		fread(sendfile.buf, FILE_SIZE, 1, send_fp);
+		SendByProtocol((char*)&sendfile);
+	}
+
+	// 3- 파일 내용 모두 전송완료
+	fileinit_msg.type = FILEEND;
+	SendByProtocol((char*)&fileinit_msg);
+	DisplayText_Send("%s 파일 전송 완료\r\n", fileinit_msg.buf);
+	DisplayText_Recv("\r\n");
+
+	fclose(send_fp);
+	return TRUE;
+}
+
+int SendByProtocol(char* msg) {
+	int retval;
+	if (g_isUDP == false) {
+		retval = send(g_sock, (char*)msg, BUFSIZE, 0);
+	}
+	else {
+		if (g_isIPv6 == false) {
+			retval = sendto(send_sock_UDPv4, (char*)msg, BUFSIZE, 0
+				, (SOCKADDR*)&remoteaddr_v4, sizeof(remoteaddr_v4));
+		}
+		else {
+			retval = sendto(send_sock_UDPv6, (char*)msg, BUFSIZE, 0
+				, (SOCKADDR*)&remoteaddr_v6, sizeof(remoteaddr_v6));
+		}
+	}
+
+	if (retval == 0 || retval == SOCKET_ERROR)
+		return FALSE;
+
+	return TRUE;
 }
 
 // 소켓 함수 오류 출력 후 종료
