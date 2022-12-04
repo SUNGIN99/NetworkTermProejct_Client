@@ -162,22 +162,22 @@ DWORD WINAPI ClientMainUDP(LPVOID);
 DWORD WINAPI WriteThread_UDPv6(LPVOID);
 DWORD WINAPI ReadThread_UDPv6(LPVOID);
 
-// 3) WINAPI 프로시저 (CALLBACK 함수)
+// Window) WINAPI 프로시저 (CALLBACK 함수)
 BOOL CALLBACK DlgProc(HWND, UINT, WPARAM, LPARAM);		// 대화상자 프로시저
 LRESULT CALLBACK WndProc(HWND, UINT, WPARAM, LPARAM);	// 자식 윈도우 프로시저
 
-// 4) EditControll 출력 함수
+// 3) EditControll 출력 함수
 void DisplayText_Recv(char* fmt, ...);  // 수신 EditControll 출력 메세지
 void DisplayText_Send(char* fmt, ...);  // 송신 EditControll 출력 메세지
 void DisplayText_KAKAOTALKONE(char* fmt, ...); // 읽음 알림 EditControll 출력 메세지
 void DisplayText_FILESTATUS(char* fmt, ...); // 파일 status
 char* DatetoString(char* fmt, ...);  // 날짜 form 반환 함수
 char* getCurrentTime();				 // 날짜 반환 함수
-// 5) 오류 출력 함수
+// 4) 오류 출력 함수
 void err_quit(char* msg);
 void err_display(char* msg);
 
-// 6) 파일 전송 관련 함수
+// 5) 파일 전송 관련 함수
 char* getFileName(char* fullPath);
 int SendFile(char* fileName);
 /* <----------------- [2]: 사용자 정의 함수 ------------------>*/
@@ -375,7 +375,7 @@ BOOL CALLBACK DlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
 			if (g_boardValid == TRUE) {
 				DestroyWindow(g_hDrawWnd);
 				g_hDrawWnd = CreateWindow("DrawBoardClass", "DrawBoardWindow", WS_CHILD,
-					450, 60, 425, 415, hDlg, (HMENU)NULL, g_hInst, NULL);
+					450, 60, 425, 508, hDlg, (HMENU)NULL, g_hInst, NULL);
 				if (g_hDrawWnd == NULL) return 1;
 				ShowWindow(g_hDrawWnd, SW_SHOW);
 				UpdateWindow(g_hDrawWnd);
@@ -389,7 +389,7 @@ BOOL CALLBACK DlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
 		case IDC_NEWBOARD: // 2-2) 그림판 새로생성
 			if (g_boardValid == FALSE) {
 				g_hDrawWnd = CreateWindow("DrawBoardClass", "DrawBoardWindow", WS_CHILD,
-					450, 60, 425, 415, hDlg, (HMENU)NULL, g_hInst, NULL);
+					450, 60, 425, 508, hDlg, (HMENU)NULL, g_hInst, NULL);
 				if (g_hDrawWnd == NULL) return 1;
 				ShowWindow(g_hDrawWnd, SW_SHOW);
 				UpdateWindow(g_hDrawWnd);
